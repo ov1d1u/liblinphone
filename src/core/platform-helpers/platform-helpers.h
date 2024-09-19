@@ -79,6 +79,7 @@ public:
 	virtual void setVideoPreviewWindow(void *windowId) = 0;
 	virtual std::string getDownloadPath() = 0;
 	virtual void setVideoWindow(void *windowId) = 0;
+	virtual void setImagePreprocessor(void *arg) = 0;
 	virtual void setParticipantDeviceVideoWindow(LinphoneParticipantDevice *participantDevice, void *windowId) = 0;
 	virtual void resizeVideoPreview(int width, int height) = 0;
 
@@ -162,6 +163,7 @@ public:
 	std::shared_ptr<SignalInformation> getSignalInformation() override;
 	void setVideoPreviewWindow(void *windowId) override;
 	void setVideoWindow(void *windowId) override;
+	void setImagePreprocessor(void *arg) override;
 	void setParticipantDeviceVideoWindow(LinphoneParticipantDevice *participantDevice, void *windowId) override;
 	void resizeVideoPreview(int width, int height) override;
 
@@ -191,19 +193,19 @@ public:
 	void restorePreviousAudioRoute() override;
 
 	void start(BCTBX_UNUSED(std::shared_ptr<LinphonePrivate::Core> core)) override{};
-	void stop(void) override{};
+	void stop(void) override {};
 
 	void didRegisterForRemotePush(BCTBX_UNUSED(void *token)) override{};
 	void didRegisterForRemotePushWithStringifiedToken(BCTBX_UNUSED(const char *tokenStr)) override{};
 	void setPushAndAppDelegateDispatchQueue(BCTBX_UNUSED(void *dispatch_queue)) override{};
 	void enableAutoIterate(BCTBX_UNUSED(bool autoIterateEnabled)) override{};
 
-	void onRecordingStarted() const override{};
-	void onRecordingPaused() const override{};
+	void onRecordingStarted() const override {};
+	void onRecordingPaused() const override {};
 	bool isRingingAllowed() const override {
 		return true;
 	};
-	void stopRinging() const override{};
+	void stopRinging() const override {};
 	void setDeviceRotation(BCTBX_UNUSED(int orientation)) const override{};
 
 protected:
