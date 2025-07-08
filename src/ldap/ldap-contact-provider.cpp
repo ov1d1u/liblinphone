@@ -25,17 +25,19 @@
 #include <iomanip>
 #include <iostream>
 
+#include "bctoolbox/crypto.hh"
 #include "contact_providers_priv.h"
+#include "friend/friend.h"
 #include "ldap-config-keys.h"
 #include "ldap-contact-fields.h"
 #include "ldap-contact-search.h"
 #include "ldap-params.h"
-#include "ldap.h"
 #include "linphone/api/c-account.h"
 #include "linphone/api/c-address.h"
 #include "linphone/api/c-types.h"
 #include "search/search-result.h"
-//
+#include "vcard/vcard.h"
+
 // TODO: From coreapi. Remove me later.
 #include "private.h"
 
@@ -54,7 +56,7 @@ LINPHONE_BEGIN_NAMESPACE
 //*******************************************	CREATION
 
 LdapContactProvider::LdapContactProvider(const std::shared_ptr<Core> &core,
-                                         std::shared_ptr<Ldap> ldap,
+                                         std::shared_ptr<LdapParams> ldap,
                                          int maxResults) {
 	mAwaitingMessageId = 0;
 	mConnected = false;
@@ -63,7 +65,7 @@ LdapContactProvider::LdapContactProvider(const std::shared_ptr<Core> &core,
 	mLd = nullptr;
 	mLdapServer = ldap;
 	mSalContext = NULL;
-	const std::map<std::string, std::vector<std::string>> &config = ldap->getLdapParams()->getConfig();
+	const std::map<std::string, std::vector<std::string>> &config = ldap->getConfig();
 	// register our hook into iterate so that LDAP can do its magic asynchronously.
 	mIteration = mCore->createTimer(std::bind(&LdapContactProvider::iterate, this), 50, "LdapContactProvider");
 	if (!LdapConfigKeys::validConfig(config)) {
@@ -104,20 +106,6 @@ void LdapContactProvider::cleanLdap() {
 	mLd = nullptr;
 }
 
-std::vector<std::shared_ptr<LdapContactProvider>> LdapContactProvider::create(const std::shared_ptr<Core> &core,
-                                                                              int maxResults) {
-	std::vector<std::shared_ptr<LdapContactProvider>> providers;
-
-	auto ldapList = core->getLdapList();
-
-	for (auto itLdap : ldapList) {
-		auto params = itLdap->getLdapParams();
-
-		if (params->getEnabled()) providers.push_back(std::make_shared<LdapContactProvider>(core, itLdap, maxResults));
-	}
-	return providers;
-}
-
 void LdapContactProvider::fallbackToNextServerUrl() {
 	lDebug() << "[LDAP] fallbackToNextServerUrl (" << mServerUrlIndex << "," << mServerUrl.size() << ")";
 	if (++mServerUrlIndex >=
@@ -153,7 +141,7 @@ void LdapContactProvider::ldapTlsConnection() {
 			fallbackToNextServerUrl();
 			mTlsConnectionId = -1;
 		} else // mTlsConnectionId is not -1 only on success.
-			lDebug() << "[LDAP] ldap_start_tls success";
+			lInfo() << "[LDAP] ldap_start_tls success";
 	} // Not 'else' : we try to get a result without having to wait an iteration
 	  // 2) Wait for connection
 	if (mTlsConnectionId >= 0) {
@@ -215,12 +203,28 @@ void LdapContactProvider::ldapTlsConnection() {
 	}
 }
 
+static void onLdapLog(const char *msg) {
+	if (msg) {
+		std::string cppMsg(msg);
+		// Remove trailing \n from openldap logs.
+		if (cppMsg.size() != 0 && cppMsg[cppMsg.size() - 1] == '\n') cppMsg.resize(cppMsg.size() - 1);
+		lInfo() << "libldap: " << cppMsg;
+	}
+}
+
+int LdapContactProvider::randomProvider(void *buffer, int bytes) {
+	bctoolbox::RNG::cRandomize((uint8_t *)buffer, (size_t)bytes);
+	return 0;
+}
+
 void LdapContactProvider::initializeLdap() {
 	int proto_version = LDAP_VERSION3;
 	int ret = ldap_set_option(NULL, LDAP_OPT_PROTOCOL_VERSION, &proto_version);
 	int debLevel = 0;
 	struct timeval timeout = {configValueToInt("timeout"), 0};
 	mCurrentAction = ACTION_NONE;
+
+	ber_set_option(NULL, LBER_OPT_LOG_PRINT_FN, (const void *)onLdapLog);
 
 	if (ret != LDAP_SUCCESS)
 		lError() << "[LDAP] Problem initializing default Protocol version to 3 : " << ret << ", ("
@@ -230,13 +234,18 @@ void LdapContactProvider::initializeLdap() {
 		lError() << "[LDAP] Problem initializing default timeout to " << timeout.tv_sec << " : " << ret << " ("
 		         << ldap_err2string(ret) << ")";
 	// Setting global options for the next initialization. These options cannot be done with the LDAP instance directly.
-	if (mConfig.count("debug") > 0 &&
-	    LinphoneLdapDebugLevelVerbose == static_cast<LinphoneLdapDebugLevel>(atoi(mConfig["debug"][0].c_str())))
-		debLevel = 7;
+	// if (mConfig.count("debug") > 0 &&
+	//    LinphoneLdapDebugLevelVerbose == static_cast<LinphoneLdapDebugLevel>(atoi(mConfig["debug"][0].c_str())))
+	// Note that openldap library does not report any error log, only debug logs.
+	if (bctbx_log_level_enabled(BCTBX_LOG_DOMAIN, BCTBX_LOG_MESSAGE)) {
+		debLevel = 0xffff; // There is debug level definition in openLDAP.
+	} else {
+		debLevel = 0;
+	}
 	ret = ldap_set_option(NULL, LDAP_OPT_DEBUG_LEVEL, &debLevel);
 	if (ret != LDAP_SUCCESS)
-		lError() << "[LDAP] Problem initializing debug options to mode 7 : " << ret << " (" << ldap_err2string(ret)
-		         << ")";
+		lError() << "[LDAP] Problem initializing debug options LDAP_OPT_DEBUG_LEVEL : " << ret << " ("
+		         << ldap_err2string(ret) << ")";
 	if (mConfig.count("use_tls") > 0 && mConfig["use_tls"][0] == "1") {
 		std::string caFile = linphone_core_get_root_ca(mCore->getCCore());
 		bool enableVerification = true;
@@ -259,6 +268,11 @@ void LdapContactProvider::initializeLdap() {
 		if (ret != LDAP_SUCCESS)
 			lError() << "[LDAP] Problem initializing TLS on setting require SAN '" << mServerUrl[mServerUrlIndex]
 			         << "': " << ret << " (" << ldap_err2string(ret) << ")";
+
+		ret = ldap_set_option(NULL, LDAP_OPT_X_TLS_RANDOM_FUNC, (void *)randomProvider);
+		if (ret != LDAP_SUCCESS) {
+			lError() << "[LDAP] Problem initializing TLS random generator function.";
+		}
 	}
 	ret = ldap_initialize(&mLd, mServerUrl[mServerUrlIndex].c_str()); // Trying to connect even on error on options
 
@@ -311,7 +325,7 @@ int LdapContactProvider::getCurrentAction() const {
 	return mCurrentAction;
 }
 
-std::shared_ptr<Ldap> LdapContactProvider::getLdapServer() {
+std::shared_ptr<LdapParams> LdapContactProvider::getLdapServer() {
 	return mLdapServer;
 }
 
@@ -344,7 +358,7 @@ void LdapContactProvider::computeLastRequestTime(const std::list<SearchRequest> 
 
 // Create a search object and store the request to be used when the provider is ready
 bool LdapContactProvider::search(const std::string &predicate,
-                                 ContactSearchCallback cb,
+                                 MagicSearchCallback cb,
                                  void *cbData,
                                  const std::list<SearchRequest> &requestHistory) {
 	if (configValueToInt("min_chars") <= (int)predicate.length()) {
@@ -458,9 +472,10 @@ int LdapContactProvider::buildContact(LdapContactFields *contact,
 					if (mConfig.count("sip_domain") > 0 && mConfig.at("sip_domain")[0] != "")
 						linphone_address_set_domain(la, mConfig.at("sip_domain")[0].c_str());
 					char *newSip = linphone_address_as_string(la);
-					char *phoneNumber =
-					    linphone_account_normalize_phone_number(linphone_core_get_default_account(mCore->getCCore()),
-					                                            attributes[attributeIndex].second.c_str());
+					const char *username = linphone_address_get_username(la);
+					char *phoneNumber = username ? linphone_account_normalize_phone_number(
+					                                   linphone_core_get_default_account(mCore->getCCore()), username)
+					                             : nullptr;
 					if (contact->mSip.count(newSip) == 0 || contact->mSip[newSip] == "")
 						contact->mSip[newSip] = (phoneNumber ? phoneNumber : "");
 					if (phoneNumber) ms_free(phoneNumber);
@@ -706,7 +721,6 @@ void LdapContactProvider::handleSearchResult(LDAPMessage *message) {
 			case LDAP_RES_SEARCH_ENTRY:
 			case LDAP_RES_EXTENDED: {
 				LDAPMessage *entry = ldap_first_entry(mLd, message);
-				LinphoneCore *lc = mCore->getCCore();
 				// Message can be a list. Loop on entries
 				while (entry != NULL) {
 					LdapContactFields ldapData;
@@ -737,32 +751,31 @@ void LdapContactProvider::handleSearchResult(LDAPMessage *message) {
 					}
 					contact_complete = buildContact(&ldapData, attributes);
 					if (contact_complete) {
-						LinphoneFriend *lfriend = linphone_core_create_friend(lc);
-						linphone_friend_set_name(lfriend, ldapData.mName.first.c_str());
-
+						std::shared_ptr<Friend> lFriend = Friend::create(mCore, ldapData.mName.first);
 						for (auto sipAddress : ldapData.mSip) {
-							LinphoneAddress *la = linphone_core_interpret_url(lc, sipAddress.first.c_str());
-							if (la) {
-								linphone_address_set_display_name(la, ldapData.mName.first.c_str());
-								linphone_friend_add_address(lfriend, la);
-								linphone_friend_add_phone_number(lfriend, L_STRING_TO_C(sipAddress.second));
-
-								int maxResults = atoi(mConfig["max_results"][0].c_str());
-								if (maxResults == 0 || req->mFoundCount < (unsigned int)maxResults) {
-									std::shared_ptr<SearchResult> searchResult = SearchResult::create(
-									    (unsigned int)0, Address::toCpp(la)->getSharedFromThis(), sipAddress.second,
-									    lfriend, LinphoneMagicSearchSourceLdapServers);
-									req->mFoundEntries.push_back(searchResult);
-									++req->mFoundCount;
-								} else { // Have more result (requested max_results+1). Do not store this result to
-									     // avoid missunderstanding from user.
-									req->mHaveMoreResults = true;
+							std::shared_ptr<Address> addr = mCore->interpretUrl(sipAddress.first, false);
+							if (addr) {
+								addr->setDisplayName(ldapData.mName.first);
+								lFriend->addAddress(addr);
+								if (!sipAddress.second.empty()) {
+									lFriend->addPhoneNumber(sipAddress.second);
 								}
-								linphone_address_unref(la);
+
+								auto vCard = lFriend->getVcard();
+								if (vCard && vCard->getUid().empty()) {
+									vCard->generateUniqueId();
+									lFriend->setRefKey(vCard->getUid());
+								}
 							}
 						}
-
-						linphone_friend_unref(lfriend);
+						int maxResults = atoi(mConfig["max_results"][0].c_str());
+						if (maxResults == 0 || req->mFoundCount < (unsigned int)maxResults) {
+							req->mFoundEntries.push_back(lFriend);
+							++req->mFoundCount;
+						} else { // Have more result (requested max_results+1). Do not store this result to
+							     // avoid missunderstanding from user.
+							req->mHaveMoreResults = true;
+						}
 					}
 					if (ber) ber_free(ber, 0);
 					if (attr) ldap_memfree(attr);

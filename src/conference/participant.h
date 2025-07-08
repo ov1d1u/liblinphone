@@ -24,7 +24,7 @@
 #include <ctime>
 #include <list>
 
-#include <belle-sip/object++.hh>
+#include "belle-sip/object++.hh"
 
 #include "address/address.h"
 #include "chat/chat-room/abstract-chat-room.h"
@@ -79,7 +79,7 @@ public:
 	static Participant::Role textToRole(const std::string &str);
 
 	explicit Participant(const std::shared_ptr<Conference> conference,
-	                     const std::shared_ptr<Address> &address,
+	                     const std::shared_ptr<const Address> &address,
 	                     std::shared_ptr<CallSession> callSession);
 	explicit Participant(const std::shared_ptr<Conference> conference, const std::shared_ptr<const Address> &address);
 	// acquires the address, that must be a simple URI without 'gr' parameter.
@@ -127,6 +127,9 @@ public:
 	void *getUserData() const;
 	void setUserData(void *ud);
 
+	void setSequenceNumber(const int nb);
+	int getSequenceNumber() const;
+
 	void setRole(Role role);
 	Role getRole() const;
 
@@ -135,17 +138,13 @@ protected:
 	std::shared_ptr<Conference> getConference() const;
 	void setConference(const std::shared_ptr<Conference> conference);
 
-	std::shared_ptr<CallSession> createSession(const Conference &conference,
-	                                           const CallSessionParams *params,
-	                                           bool hasMedia,
-	                                           CallSessionListener *listener);
+	std::shared_ptr<CallSession>
+	createSession(const Conference &conference, const CallSessionParams *params, bool hasMedia);
 
 	// TODO: Delete
 	// Temporary method to unify audio video conference and conference codes for group chats
-	std::shared_ptr<CallSession> createSession(const std::shared_ptr<Core> &core,
-	                                           const CallSessionParams *params,
-	                                           bool hasMedia,
-	                                           CallSessionListener *listener);
+	std::shared_ptr<CallSession>
+	createSession(const std::shared_ptr<Core> &core, const CallSessionParams *params, bool hasMedia);
 	inline void setSession(std::shared_ptr<CallSession> callSession) {
 		session = callSession;
 	}
@@ -168,7 +167,7 @@ protected:
 
 private:
 	std::weak_ptr<Conference> mConference;
-	std::shared_ptr<Address> addr;
+	std::shared_ptr<Address> mAddress;
 	bool isThisAdmin = false;
 	bool isThisFocus = false;
 	std::shared_ptr<CallSession> session;
@@ -176,6 +175,7 @@ private:
 	time_t creationTime;
 	bool preserveSession = false;
 	Role mRole = Role::Listener;
+	int mSequence = -1;
 
 	void *mUserData = nullptr;
 
@@ -183,7 +183,10 @@ private:
 };
 
 inline std::ostream &operator<<(std::ostream &os, const Participant &participant) {
-	return os << participant.getAddress()->toString();
+	auto address = participant.getAddress();
+	auto addressStr = address ? address->toString() : std::string("sip:");
+	return os << "Participant [" << &participant << "] (" << addressStr << ")";
+	;
 	return os;
 }
 

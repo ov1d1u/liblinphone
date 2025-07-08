@@ -89,7 +89,7 @@ public:
 
 	void onRecordingStarted() const override;
 	void onRecordingPaused() const override;
-	bool isRingingAllowed() const override;
+	bool isPlayingSoundAllowed() const override;
 	void stopRinging() const override;
 
 	void setDeviceRotation(int orientation) const override;
@@ -149,7 +149,7 @@ private:
 	jmethodID mStopAutoIterateId = nullptr;
 	jmethodID mSetAudioManagerCommunicationMode = nullptr;
 	jmethodID mSetAudioManagerNormalMode = nullptr;
-	jmethodID mIsRingingAllowed = nullptr;
+	jmethodID mIsPlayingSoundAllowed = nullptr;
 	jmethodID mStopRingingId = nullptr;
 	jmethodID mDestroyPlatformHelperId = nullptr;
 
@@ -240,7 +240,7 @@ AndroidPlatformHelpers::AndroidPlatformHelpers(std::shared_ptr<LinphonePrivate::
 	mStopAutoIterateId = getMethodId(env, klass, "stopAutoIterate", "()V");
 	mSetAudioManagerCommunicationMode = getMethodId(env, klass, "setAudioManagerInCommunicationMode", "()V");
 	mSetAudioManagerNormalMode = getMethodId(env, klass, "setAudioManagerInNormalMode", "()V");
-	mIsRingingAllowed = getMethodId(env, klass, "isRingingAllowed", "()Z");
+	mIsPlayingSoundAllowed = getMethodId(env, klass, "isPlayingSoundAllowed", "()Z");
 	mStopRingingId = getMethodId(env, klass, "stopRinging", "()V");
 
 	mDestroyPlatformHelperId = getMethodId(env, klass, "destroy", "()V");
@@ -610,11 +610,11 @@ void AndroidPlatformHelpers::onRecordingStarted() const {
 void AndroidPlatformHelpers::onRecordingPaused() const {
 }
 
-bool AndroidPlatformHelpers::isRingingAllowed() const {
+bool AndroidPlatformHelpers::isPlayingSoundAllowed() const {
 	JNIEnv *env = ms_get_jni_env();
 	if (env) {
 		if (mJavaHelper) {
-			return env->CallBooleanMethod(mJavaHelper, mIsRingingAllowed);
+			return env->CallBooleanMethod(mJavaHelper, mIsPlayingSoundAllowed);
 		}
 	}
 	return false;
@@ -848,9 +848,7 @@ extern "C" JNIEXPORT void JNICALL Java_org_linphone_core_tools_AndroidPlatformHe
 extern "C" JNIEXPORT void JNICALL Java_org_linphone_core_tools_AndroidPlatformHelper_stopCore(
     BCTBX_UNUSED(JNIEnv *env), BCTBX_UNUSED(jobject thiz), jlong ptr) {
 	LinphoneCore *core = static_cast<LinphoneCore *>((void *)ptr);
-
-	const std::function<void()> fun = [core]() { linphone_core_stop(core); };
-	L_GET_CPP_PTR_FROM_C_OBJECT(core)->performOnIterateThread(fun);
+	linphone_core_stop(core);
 }
 
 extern "C" JNIEXPORT void JNICALL Java_org_linphone_core_tools_AndroidPlatformHelper_leaveConference(

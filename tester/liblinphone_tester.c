@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010-2022 Belledonne Communications SARL.
+ * Copyright (c) 2010-2025 Belledonne Communications SARL.
  *
  * This file is part of Liblinphone
  * (see https://gitlab.linphone.org/BC/public/liblinphone).
@@ -45,7 +45,7 @@ static const char *liblinphone_helper =
     "\t\t\t--auth-domain <test auth domain>	(deprecated)\n"
     "\t\t\t--dns-hosts </etc/hosts -like file to used to override DNS names or 'none' for no overriding (default: "
     "tester_hosts)> (deprecated)\n"
-    "\t\t\t--max-failed  max number of failed tests until program exit with return code 1. Current default is 2"
+    "\t\t\t--max-failed  max number of failed tests until program exit with return code 1. Current default is 2\n"
     "\t\t\t--max-cpucount max number of cpu declared at mediastremaer2 level Current default is 2";
 
 typedef struct _MireData {
@@ -499,7 +499,8 @@ void liblinphone_tester_add_suites(void) {
 	liblinphone_tester_add_suite_with_default_time(&secure_message_test_suite, 482);
 	liblinphone_tester_add_suite_with_default_time(&secure_message2_test_suite, 278);
 	if (liblinphone_tester_is_lime_PQ_available()) {
-		liblinphone_tester_add_suite_with_default_time(&secure_group_chat_migration_test_suite, 72);
+		liblinphone_tester_add_suite_with_default_time(&secure_group_chat_migration_test_suite, 130);
+		liblinphone_tester_add_suite_with_default_time(&secure_group_chat_multialgos_test_suite, 72);
 	}
 	liblinphone_tester_add_suite_with_default_time(&lime_server_auth_test_suite, 125);
 	liblinphone_tester_add_suite_with_default_time(&ephemeral_group_chat_test_suite, 514);
@@ -512,6 +513,7 @@ void liblinphone_tester_add_suites(void) {
 	    &local_conference_test_suite_scheduled_conference_audio_only_participant, 581);
 	liblinphone_tester_add_suite_with_default_time(
 	    &local_conference_test_suite_scheduled_conference_with_screen_sharing, 581);
+	liblinphone_tester_add_suite_with_default_time(&local_conference_test_suite_scheduled_conference_with_chat, 600);
 	liblinphone_tester_add_suite_with_default_time(&local_conference_test_suite_scheduled_ice_conference, 563);
 	liblinphone_tester_add_suite_with_default_time(&local_conference_test_suite_impromptu_conference, 384);
 	liblinphone_tester_add_suite_with_default_time(&local_conference_test_suite_encrypted_impromptu_conference, 150);
@@ -549,7 +551,7 @@ void liblinphone_tester_add_suites(void) {
 	liblinphone_tester_add_suite_with_default_time(&dtls_srtp_ice_capability_negotiation_test_suite, 101);
 #ifdef VIDEO_ENABLED
 	liblinphone_tester_add_suite_with_default_time(&video_test_suite, 19);
-	liblinphone_tester_add_suite_with_default_time(&call_video_test_suite, 598);
+	liblinphone_tester_add_suite_with_default_time(&call_video_test_suite, 620);
 	liblinphone_tester_add_suite_with_default_time(&call_video_msogl_test_suite,
 	                                               577); // Conditionals are defined in suite
 	liblinphone_tester_add_suite_with_default_time(&call_video_advanced_scenarios_test_suite, 168);
@@ -572,6 +574,9 @@ void liblinphone_tester_add_suites(void) {
 	liblinphone_tester_add_suite_with_default_time(&message_test_suite, 521);
 	// liblinphone_tester_add_suite_with_default_time(&lime_message_test_suite, 27);
 	liblinphone_tester_add_suite_with_default_time(&rtt_message_test_suite, 95);
+#ifdef HAVE_BAUDOT
+	liblinphone_tester_add_suite_with_default_time(&baudot_message_test_suite, 60);
+#endif /* HAVE_BAUDOT */
 	liblinphone_tester_add_suite_with_default_time(&session_timers_test_suite, 110);
 	liblinphone_tester_add_suite_with_default_time(&presence_test_suite, 77);
 	liblinphone_tester_add_suite_with_default_time(&presence_server_test_suite, 339);
@@ -602,6 +607,8 @@ void liblinphone_tester_add_suites(void) {
 	    &local_conference_test_suite_end_to_end_encryption_scheduled_conference_audio_only_participant, 337);
 	liblinphone_tester_add_suite_with_default_time(
 	    &local_conference_test_suite_end_to_end_encryption_impromptu_conference, 155);
+	liblinphone_tester_add_suite_with_default_time(
+	    &local_conference_test_suite_end_to_end_encryption_scheduled_conference_with_chat, 155);
 #endif // HAVE_EKT_SERVER_PLUGIN
 	liblinphone_tester_add_suite_with_default_time(&clonable_object_test_suite, 0);
 #ifdef HAVE_DB_STORAGE
@@ -629,8 +636,11 @@ void liblinphone_tester_add_suites(void) {
 	liblinphone_tester_add_suite_with_default_time(&wrapper_cpp_test_suite, 8);
 #endif
 	liblinphone_tester_add_suite_with_default_time(&mwi_test_suite, 0);
+	bc_tester_add_suite(&refer_test_suite);
 	bc_tester_add_suite(&bearer_auth_test_suite);
 	bc_tester_add_suite(&call_twisted_cases_suite);
+	bc_tester_add_suite(&http_client_test_suite);
+	bc_tester_add_suite(&turn_server_test_suite);
 }
 
 void liblinphone_tester_init(void (*ftester_printf)(int level, const char *fmt, va_list args)) {
@@ -708,4 +718,78 @@ float liblinphone_tester_get_cpu_bogomips(void) {
 	fclose(f);
 #endif
 	return ret;
+}
+
+int liblinphone_tester_audio_device_name_match(const LinphoneAudioDevice *audio_device, const char *name) {
+	return strcmp(linphone_audio_device_get_device_name(audio_device), name);
+}
+
+int liblinphone_tester_audio_device_match(const LinphoneAudioDevice *a, LinphoneAudioDevice *b) {
+	return strcmp(linphone_audio_device_get_id(a), linphone_audio_device_get_id(b));
+}
+
+bctbx_list_t *liblinphone_tester_find_changing_devices(bctbx_list_t *a, bctbx_list_t *b, bool_t *is_new) {
+	bctbx_list_t *devices_changed = NULL;
+	bctbx_list_t *device_it = a;
+	bctbx_list_t *dev_found = NULL;
+	if (!a && !b) return NULL;
+	// Check for disconnected device
+	while (device_it) {
+		LinphoneAudioDevice *device = (LinphoneAudioDevice *)bctbx_list_get_data(device_it);
+		dev_found = bctbx_list_find_custom(b, (bctbx_compare_func)liblinphone_tester_audio_device_match, device);
+		device_it = bctbx_list_next(device_it);
+		if (!dev_found) {
+			devices_changed = bctbx_list_append(devices_changed, device);
+			linphone_audio_device_ref(device);
+			*is_new = FALSE;
+		}
+	}
+	// Check for connected device
+	if (!devices_changed) {
+		device_it = b;
+		while (device_it) {
+			LinphoneAudioDevice *device = (LinphoneAudioDevice *)bctbx_list_get_data(device_it);
+			dev_found = bctbx_list_find_custom(a, (bctbx_compare_func)liblinphone_tester_audio_device_match, device);
+			device_it = bctbx_list_next(device_it);
+			if (!dev_found) {
+				devices_changed = bctbx_list_append(devices_changed, device);
+				linphone_audio_device_ref(device);
+				*is_new = TRUE;
+			}
+		}
+	}
+
+	return devices_changed;
+}
+
+int liblinphone_tester_sound_detection(LinphoneCoreManager *a,
+                                       LinphoneCoreManager *b,
+                                       int timeout_ms,
+                                       const char *log_tag) {
+	int have_sound_count = 0;
+	const float silence_threshold = -20.f;
+
+	LinphoneCall *calls[2] = {linphone_core_get_current_call(a->lc), linphone_core_get_current_call(b->lc)};
+	MSTimeSpec start;
+
+	liblinphone_tester_clock_start(&start);
+	while (have_sound_count < 2 &&
+	       !liblinphone_tester_clock_elapsed(
+	           &start, timeout_ms)) { // We want to avoid potential sound spikes while disconnection.
+		float record_levels[2] = {linphone_call_get_record_volume(calls[0]), linphone_call_get_record_volume(calls[1])};
+		float playback_levels[2] = {linphone_call_get_play_volume(calls[0]), linphone_call_get_play_volume(calls[1])};
+		bool_t have_sounds[2] = {record_levels[1] > silence_threshold && playback_levels[0] > silence_threshold,
+		                         record_levels[0] > silence_threshold && playback_levels[1] > silence_threshold};
+
+		// Note: Sounds are send from Pauline to Marie without passing by the capture device (send from file)
+		// The test must check for Marie => Pauline, because the sound comes directly from the capture device.
+		// At this point, playback device cannot be tested without complex code (device monitoring).
+		if (have_sounds[0] && have_sounds[1]) ++have_sound_count;
+		else have_sound_count = 0;
+		if (log_tag)
+			ms_message("%s Record => Playback levels: %f => %f, %f => %f", log_tag, record_levels[0],
+			           playback_levels[1], record_levels[1], playback_levels[0]);
+		wait_for_until(a->lc, b->lc, NULL, 0, 100);
+	}
+	return have_sound_count >= 2 ? 0 : -1;
 }

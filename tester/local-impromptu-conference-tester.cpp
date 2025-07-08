@@ -29,19 +29,29 @@ static void create_simple_conference_dial_out(void) {
 	LinphoneVideoActivationPolicy *pol = linphone_factory_create_video_activation_policy(linphone_factory_get());
 	linphone_video_activation_policy_set_automatically_accept(pol, FALSE);
 	linphone_video_activation_policy_set_automatically_initiate(pol, FALSE);
-	create_conference_dial_out_base(FALSE, LinphoneConferenceLayoutActiveSpeaker, pol, FALSE, FALSE,
+	create_conference_dial_out_base(LinphoneConferenceLayoutActiveSpeaker, pol, FALSE, FALSE,
 	                                LinphoneConferenceParticipantListTypeClosed, TRUE, FALSE,
-	                                LinphoneConferenceSecurityLevelNone, FALSE);
+	                                LinphoneConferenceSecurityLevelNone, FALSE, FALSE);
 	linphone_video_activation_policy_unref(pol);
 }
 
-static void create_simple_conference_dial_out_and_ics(void) {
+static void create_simple_conference_dial_out_with_chat(void) {
+	LinphoneVideoActivationPolicy *pol = linphone_factory_create_video_activation_policy(linphone_factory_get());
+	linphone_video_activation_policy_set_automatically_accept(pol, FALSE);
+	linphone_video_activation_policy_set_automatically_initiate(pol, FALSE);
+	create_conference_dial_out_base(LinphoneConferenceLayoutActiveSpeaker, pol, FALSE, FALSE,
+	                                LinphoneConferenceParticipantListTypeClosed, TRUE, FALSE,
+	                                LinphoneConferenceSecurityLevelNone, FALSE, TRUE);
+	linphone_video_activation_policy_unref(pol);
+}
+
+static void create_simple_ice_conference_dial_out(void) {
 	LinphoneVideoActivationPolicy *pol = linphone_factory_create_video_activation_policy(linphone_factory_get());
 	linphone_video_activation_policy_set_automatically_accept(pol, TRUE);
 	linphone_video_activation_policy_set_automatically_initiate(pol, TRUE);
-	create_conference_dial_out_base(TRUE, LinphoneConferenceLayoutGrid, pol, TRUE, TRUE,
+	create_conference_dial_out_base(LinphoneConferenceLayoutGrid, pol, TRUE, TRUE,
 	                                LinphoneConferenceParticipantListTypeOpen, TRUE, FALSE,
-	                                LinphoneConferenceSecurityLevelNone, FALSE);
+	                                LinphoneConferenceSecurityLevelNone, FALSE, FALSE);
 	linphone_video_activation_policy_unref(pol);
 }
 
@@ -49,9 +59,9 @@ static void create_simple_conference_dial_out_with_calls_declined(void) {
 	LinphoneVideoActivationPolicy *pol = linphone_factory_create_video_activation_policy(linphone_factory_get());
 	linphone_video_activation_policy_set_automatically_accept(pol, TRUE);
 	linphone_video_activation_policy_set_automatically_initiate(pol, TRUE);
-	create_conference_dial_out_base(FALSE, LinphoneConferenceLayoutGrid, pol, TRUE, TRUE,
+	create_conference_dial_out_base(LinphoneConferenceLayoutGrid, pol, TRUE, TRUE,
 	                                LinphoneConferenceParticipantListTypeOpen, FALSE, FALSE,
-	                                LinphoneConferenceSecurityLevelNone, FALSE);
+	                                LinphoneConferenceSecurityLevelNone, FALSE, FALSE);
 	linphone_video_activation_policy_unref(pol);
 }
 
@@ -59,9 +69,9 @@ static void create_simple_point_to_point_encrypted_conference_dial_out(void) {
 	LinphoneVideoActivationPolicy *pol = linphone_factory_create_video_activation_policy(linphone_factory_get());
 	linphone_video_activation_policy_set_automatically_accept(pol, TRUE);
 	linphone_video_activation_policy_set_automatically_initiate(pol, TRUE);
-	create_conference_dial_out_base(FALSE, LinphoneConferenceLayoutActiveSpeaker, pol, FALSE, FALSE,
+	create_conference_dial_out_base(LinphoneConferenceLayoutActiveSpeaker, pol, FALSE, FALSE,
 	                                LinphoneConferenceParticipantListTypeClosed, TRUE, FALSE,
-	                                LinphoneConferenceSecurityLevelPointToPoint, FALSE);
+	                                LinphoneConferenceSecurityLevelPointToPoint, FALSE, FALSE);
 	linphone_video_activation_policy_unref(pol);
 }
 
@@ -69,9 +79,9 @@ static void create_simple_conference_dial_out_participant_codec_mismatch(void) {
 	LinphoneVideoActivationPolicy *pol = linphone_factory_create_video_activation_policy(linphone_factory_get());
 	linphone_video_activation_policy_set_automatically_accept(pol, FALSE);
 	linphone_video_activation_policy_set_automatically_initiate(pol, FALSE);
-	create_conference_dial_out_base(FALSE, LinphoneConferenceLayoutActiveSpeaker, pol, FALSE, FALSE,
+	create_conference_dial_out_base(LinphoneConferenceLayoutActiveSpeaker, pol, FALSE, FALSE,
 	                                LinphoneConferenceParticipantListTypeClosed, TRUE, TRUE,
-	                                LinphoneConferenceSecurityLevelNone, FALSE);
+	                                LinphoneConferenceSecurityLevelNone, FALSE, FALSE);
 	linphone_video_activation_policy_unref(pol);
 }
 
@@ -79,9 +89,9 @@ static void create_simple_conference_dial_out_with_video_not_accepted(void) {
 	LinphoneVideoActivationPolicy *pol = linphone_factory_create_video_activation_policy(linphone_factory_get());
 	linphone_video_activation_policy_set_automatically_accept(pol, FALSE);
 	linphone_video_activation_policy_set_automatically_initiate(pol, TRUE);
-	create_conference_dial_out_base(FALSE, LinphoneConferenceLayoutActiveSpeaker, pol, FALSE, FALSE,
+	create_conference_dial_out_base(LinphoneConferenceLayoutActiveSpeaker, pol, FALSE, FALSE,
 	                                LinphoneConferenceParticipantListTypeClosed, TRUE, FALSE,
-	                                LinphoneConferenceSecurityLevelNone, FALSE);
+	                                LinphoneConferenceSecurityLevelNone, FALSE, FALSE);
 	linphone_video_activation_policy_unref(pol);
 }
 
@@ -89,9 +99,9 @@ static void create_simple_conference_dial_out_with_video_not_initiated(void) {
 	LinphoneVideoActivationPolicy *pol = linphone_factory_create_video_activation_policy(linphone_factory_get());
 	linphone_video_activation_policy_set_automatically_accept(pol, TRUE);
 	linphone_video_activation_policy_set_automatically_initiate(pol, FALSE);
-	create_conference_dial_out_base(FALSE, LinphoneConferenceLayoutGrid, pol, FALSE, FALSE,
+	create_conference_dial_out_base(LinphoneConferenceLayoutGrid, pol, FALSE, FALSE,
 	                                LinphoneConferenceParticipantListTypeClosed, TRUE, FALSE,
-	                                LinphoneConferenceSecurityLevelNone, FALSE);
+	                                LinphoneConferenceSecurityLevelNone, FALSE, FALSE);
 	linphone_video_activation_policy_unref(pol);
 }
 
@@ -162,7 +172,7 @@ static void create_simple_conference_dial_out_organizer_codec_mismatch(void) {
 			                                                : LinphoneParticipantRoleSpeaker;
 		}
 		LinphoneAddress *confAddr = create_conference_on_server(focus, marie, participantList, -1, -1, initialSubject,
-		                                                        description, TRUE, security_level, TRUE, FALSE);
+		                                                        description, TRUE, security_level, TRUE, FALSE, NULL);
 		BC_ASSERT_PTR_NULL(confAddr);
 
 		// Chat room creation to send ICS
@@ -286,7 +296,7 @@ static void simple_dial_out_conference_with_no_payloads(void) {
 			                                                : LinphoneParticipantRoleSpeaker;
 		}
 		LinphoneAddress *confAddr = create_conference_on_server(focus, marie, participantList, -1, -1, initialSubject,
-		                                                        description, FALSE, security_level, TRUE, FALSE);
+		                                                        description, FALSE, security_level, TRUE, FALSE, NULL);
 		BC_ASSERT_PTR_NOT_NULL(confAddr);
 
 		// Chat room creation to send ICS
@@ -463,7 +473,7 @@ static void create_conference_dial_out_with_video_activation_and_layout_change(v
 		}
 		LinphoneConferenceSecurityLevel security_level = LinphoneConferenceSecurityLevelNone;
 		LinphoneAddress *confAddr = create_conference_on_server(focus, marie, participantList, -1, -1, initialSubject,
-		                                                        description, FALSE, security_level, TRUE, FALSE);
+		                                                        description, FALSE, security_level, TRUE, FALSE, NULL);
 		BC_ASSERT_PTR_NOT_NULL(confAddr);
 
 		BC_ASSERT_TRUE(wait_for_list(coresList, &marie.getStats().number_of_LinphoneConferenceStateCreated, 1,
@@ -592,7 +602,7 @@ static void create_conference_dial_out_with_video_activation_and_layout_change(v
 				BC_ASSERT_TRUE(linphone_call_log_was_conference(call_log));
 				LinphoneConferenceInfo *call_log_info = linphone_call_log_get_conference_info(call_log);
 				if (BC_ASSERT_PTR_NOT_NULL(call_log_info)) {
-					check_conference_info_against_db(mgr, confAddr, call_log_info);
+					check_conference_info_against_db(mgr, confAddr, call_log_info, FALSE);
 				}
 			}
 			bctbx_list_free_with_data(participants_info3, (bctbx_list_free_func)linphone_participant_info_unref);
@@ -635,19 +645,22 @@ static void create_conference_dial_out_with_video_activation_and_layout_change(v
 		BC_ASSERT_TRUE(wait_for_list(coresList, &focus.getStats().number_of_participant_devices_added,
 		                             focus_stat.number_of_participant_devices_added + participant_no,
 		                             liblinphone_tester_sip_timeout));
-		BC_ASSERT_TRUE(wait_for_list(coresList, &focus.getStats().number_of_participant_devices_joined,
-		                             focus_stat.number_of_participant_devices_joined + participant_no,
+		BC_ASSERT_TRUE(wait_for_list(coresList, &focus.getStats().number_of_conference_participant_devices_present,
+		                             focus_stat.number_of_conference_participant_devices_present + participant_no,
+		                             liblinphone_tester_sip_timeout));
+		BC_ASSERT_TRUE(wait_for_list(coresList, &focus.getStats().number_of_participant_devices_present,
+		                             focus_stat.number_of_participant_devices_present + participant_no,
 		                             liblinphone_tester_sip_timeout));
 
 		LinphoneConference *fconference = linphone_core_search_conference_2(focus.getLc(), confAddr);
 		BC_ASSERT_PTR_NOT_NULL(fconference);
 
 		std::map<LinphoneCoreManager *, LinphoneParticipantInfo *> memberList =
-		    fill_memmber_list(members, participantList, marie.getCMgr(), participants_info);
+		    fill_member_list(members, participantList, marie.getCMgr(), participants_info);
 		wait_for_conference_streams({focus, marie, pauline}, conferenceMgrs, focus.getCMgr(), memberList, confAddr,
 		                            TRUE);
 
-		// wait bit more to detect side effect if any
+		// wait a bit longer to detect side effect if any
 		CoreManagerAssert({focus, marie, pauline}).waitUntil(chrono::seconds(15), [] { return false; });
 
 		for (auto mgr : conferenceMgrs) {
@@ -733,7 +746,7 @@ static void create_conference_dial_out_with_video_activation_and_layout_change(v
 						BC_ASSERT_TRUE(linphone_call_log_was_conference(call_log));
 						LinphoneConferenceInfo *call_log_info = linphone_call_log_get_conference_info(call_log);
 						if (BC_ASSERT_PTR_NOT_NULL(call_log_info)) {
-							check_conference_info_against_db(mgr, confAddr, call_log_info);
+							check_conference_info_against_db(mgr, confAddr, call_log_info, FALSE);
 						}
 					}
 
@@ -759,10 +772,7 @@ static void create_conference_dial_out_with_video_activation_and_layout_change(v
 					bctbx_list_free_with_data(devices, (void (*)(void *))linphone_participant_device_unref);
 				}
 				BC_ASSERT_STRING_EQUAL(linphone_conference_get_subject(pconference), initialSubject);
-				LinphoneParticipant *me = linphone_conference_get_me(pconference);
-				BC_ASSERT_TRUE(linphone_participant_is_admin(me) ==
-				               ((mgr == marie.getCMgr()) || (mgr == focus.getCMgr())));
-				BC_ASSERT_TRUE(linphone_address_weak_equal(linphone_participant_get_address(me), mgr->identity));
+				check_conference_me(pconference, ((mgr == marie.getCMgr()) || (mgr == focus.getCMgr())));
 				bctbx_list_t *participants = linphone_conference_get_participant_list(pconference);
 				for (bctbx_list_t *itp = participants; itp; itp = bctbx_list_next(itp)) {
 					LinphoneParticipant *p = (LinphoneParticipant *)bctbx_list_get_data(itp);
@@ -962,18 +972,18 @@ static void create_conference_dial_out_with_video_activation_and_layout_change(v
 
 		for (auto mgr : members) {
 			const bctbx_list_t *call_logs = linphone_core_get_call_logs(mgr->lc);
-			BC_ASSERT_EQUAL((unsigned int)bctbx_list_size(call_logs), 1, unsigned int, "%u");
+			BC_ASSERT_EQUAL(bctbx_list_size(call_logs), 1, size_t, "%zu");
 
 			bctbx_list_t *mgr_focus_call_log =
 			    linphone_core_get_call_history_2(mgr->lc, focus.getCMgr()->identity, mgr->identity);
 			BC_ASSERT_PTR_NOT_NULL(mgr_focus_call_log);
 			if (mgr_focus_call_log) {
-				BC_ASSERT_EQUAL((unsigned int)bctbx_list_size(mgr_focus_call_log), 1, unsigned int, "%u");
+				BC_ASSERT_EQUAL(bctbx_list_size(mgr_focus_call_log), 1, size_t, "%zu");
 				for (bctbx_list_t *it = mgr_focus_call_log; it; it = bctbx_list_next(it)) {
 					LinphoneCallLog *call_log = (LinphoneCallLog *)it->data;
 					LinphoneConferenceInfo *call_log_info = linphone_call_log_get_conference_info(call_log);
 					if (BC_ASSERT_PTR_NOT_NULL(call_log_info)) {
-						check_conference_info_against_db(mgr, confAddr, call_log_info);
+						check_conference_info_against_db(mgr, confAddr, call_log_info, FALSE);
 					}
 					BC_ASSERT_TRUE(linphone_call_log_was_conference(call_log));
 				}
@@ -995,7 +1005,7 @@ static void create_conference_dial_out_with_video_activation_and_layout_change(v
 			bctbx_list_free_with_data(participants_info3, (bctbx_list_free_func)linphone_participant_info_unref);
 		}
 
-		// wait bit more to detect side effect if any
+		// wait a bit longer to detect side effect if any
 		CoreManagerAssert({focus, marie, pauline}).waitUntil(chrono::seconds(2), [] { return false; });
 
 		bctbx_list_free_with_data(participants_info, (bctbx_list_free_func)linphone_participant_info_unref);
@@ -1013,8 +1023,9 @@ static test_t local_conference_encrypted_impromptu_conference_tests[] = {
 
 static test_t local_conference_impromptu_conference_tests[] = {
     TEST_NO_TAG("Create simple dial out conference", LinphoneTest::create_simple_conference_dial_out),
-    TEST_NO_TAG("Create simple dial out ICE conference and ICS sent",
-                LinphoneTest::create_simple_conference_dial_out_and_ics),
+    TEST_NO_TAG("Create simple dial out conference with chat",
+                LinphoneTest::create_simple_conference_dial_out_with_chat),
+    TEST_NO_TAG("Create simple dial out ICE conference", LinphoneTest::create_simple_ice_conference_dial_out),
     TEST_NO_TAG("Create simple dial out conference with late participant addition",
                 LinphoneTest::create_simple_conference_dial_out_with_late_participant_addition),
     TEST_NO_TAG("Create simple dial out conference with many late participant additions",
@@ -1053,7 +1064,7 @@ static test_t local_conference_impromptu_mismatch_conference_tests[] = {
                 LinphoneTest::simple_dial_out_conference_with_no_payloads)};
 
 test_suite_t local_conference_test_suite_encrypted_impromptu_conference = {
-    "Local conference tester (Impromptu Encrypted Conference)",
+    "Local conference tester (Impromptu Encrypted Conference Point to Point Encryption)",
     NULL,
     NULL,
     liblinphone_tester_before_each,

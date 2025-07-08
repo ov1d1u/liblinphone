@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010-2022 Belledonne Communications SARL.
+ * Copyright (c) 2010-2024 Belledonne Communications SARL.
  *
  * This file is part of Liblinphone 
  * (see https://gitlab.linphone.org/BC/public/liblinphone).
@@ -44,6 +44,7 @@ import android.os.PowerManager;
 import android.os.PowerManager.WakeLock;
 import android.view.Surface;
 import android.view.TextureView;
+import android.Manifest;
 
 import android.app.Application;
 import android.app.ActivityManager;
@@ -52,8 +53,10 @@ import android.content.SharedPreferences;
 import android.content.SharedPreferences.Editor;
 import android.hardware.display.DisplayManager;
 import android.media.AudioManager;
+import android.os.Vibrator;
 import android.view.Display;
 
+import org.linphone.core.Address;
 import org.linphone.core.SignalType;
 import org.linphone.core.SignalStrengthUnit;
 import org.linphone.core.tools.compatibility.DeviceUtils;
@@ -151,6 +154,8 @@ public class AndroidPlatformHelper {
 
     private Class mFileTransferServiceClass;
     private boolean mFileTransferServiceStarted;
+    private boolean mFileTransferServiceNotificationStarted;
+    private boolean mFileTransferServiceStopPending;
 
     private Class mServiceClass;
 
@@ -168,6 +173,9 @@ public class AndroidPlatformHelper {
 
     private DisplayManager mDisplayManager;
     private DisplayManager.DisplayListener mDisplayListener;
+    
+    private Vibrator mVibrator;
+    private boolean mIsVibrating;
 
     // These methods will make sure the real core.<method> will be called on the same thread as the core.iterate()
     private native void updatePushNotificationInformation(long ptr, String appId, String token);
@@ -234,6 +242,8 @@ public class AndroidPlatformHelper {
             Log.i("[Platform Helper] Linphone SDK Android classes won't use main thread: [", thread.getName(), "], id=", thread.getId());
         }
         sInstance = this;
+        
+        mVibrator = (Vibrator) mContext.getSystemService(Context.VIBRATOR_SERVICE);
 
         Log.i("[Platform Helper] Created, wifi only mode is " + (mWifiOnly ? "enabled" : "disabled"));
     }
@@ -375,7 +385,7 @@ public class AndroidPlatformHelper {
                 Log.i("[Platform Helper] Last call ended");
                 if (mAudioHelper == null) return;
                 if (core.isNativeRingingEnabled()) {
-                    mAudioHelper.stopRinging();
+                    stopRinging();
                 } else {
                     mAudioHelper.releaseRingingAudioFocus();
                 }
@@ -401,7 +411,7 @@ public class AndroidPlatformHelper {
                             Log.w("[Platform Helper] Ringing was disabled in configuration (disable_ringing item in [sound] section is set to 1)");
                         } else {
                             Log.i("[Platform Helper] Incoming call received, no other call, start ringing");
-                            mAudioHelper.startRinging(mContext, core.getRing(), call.getRemoteAddress());
+                            startRinging(call.getRemoteAddress());
                         }
                     } else {
                         Log.i("[Platform Helper] Incoming call received, no other call, acquire ringing audio focus");
@@ -413,7 +423,7 @@ public class AndroidPlatformHelper {
                     } else {
                         if (core.isNativeRingingEnabled()) {
                             Log.w("[Platform Helper] Incoming call is early media and ringing is disabled, stop ringing");
-                            mAudioHelper.stopRinging();
+                            stopRinging();
                         } else {
                             Log.i("[Platform Helper] Incoming call is early media and ringing is disabled, keep ringing audio focus as sound card will be using RING stream");
                         }
@@ -421,7 +431,7 @@ public class AndroidPlatformHelper {
                 } else if (state == Call.State.Connected) {
                     if (call.getDir() == Call.Dir.Incoming && core.isNativeRingingEnabled()) {
                         Log.i("[Platform Helper] Stop incoming call ringing");
-                        mAudioHelper.stopRinging();
+                        stopRinging();
                     } else {
                         Log.i("[Platform Helper] Stop incoming call ringing audio focus");
                         mAudioHelper.releaseRingingAudioFocus();
@@ -459,8 +469,16 @@ public class AndroidPlatformHelper {
     }
 
     public void stop() {
-        Log.i("[Platform Helper] Stopping");
-        stopCore(mCore.getNativePointer());
+        if (mCore != null) {
+            Runnable runnable = new Runnable() {
+                @Override
+                public void run() {
+                    Log.i("[Platform Helper] Stopping Core");
+                    stopCore(mCore.getNativePointer());
+                }
+            };
+            dispatchOnCoreThread(runnable);
+        }
     }
 
     public void onLinphoneCoreStop() {
@@ -691,11 +709,11 @@ public class AndroidPlatformHelper {
         String mRingbackSoundFile = basePath + "/share/sounds/linphone/ringback.wav";
         String mPauseSoundFile = basePath + "/share/sounds/linphone/rings/dont_wait_too_long.mkv";
         String mErrorToneFile = basePath + "/share/sounds/linphone/incoming_chat.wav";
-        String mGrammarCpimFile = basePath + "/share/belr/grammars/cpim_grammar";
-        String mGrammarIcsFile = basePath + "/share/belr/grammars/ics_grammar";
-        String mGrammarIdentityFile = basePath + "/share/belr/grammars/identity_grammar";
-        String mGrammarMwiFile = basePath + "/share/belr/grammars/mwi_grammar";
-        String mGrammarVcardFile = basePath + "/share/belr/grammars/vcard_grammar";
+        String mGrammarCpimFile = basePath + "/share/belr/grammars/cpim_grammar.belr";
+        String mGrammarIcsFile = basePath + "/share/belr/grammars/ics_grammar.belr";
+        String mGrammarIdentityFile = basePath + "/share/belr/grammars/identity_grammar.belr";
+        String mGrammarMwiFile = basePath + "/share/belr/grammars/mwi_grammar.belr";
+        String mGrammarVcardFile = basePath + "/share/belr/grammars/vcard_grammar.belr";
 
         copyEvenIfExists(getResourceIdentifierFromName("cpim_grammar"), mGrammarCpimFile);
         copyEvenIfExists(getResourceIdentifierFromName("ics_grammar"), mGrammarIcsFile);
@@ -764,7 +782,7 @@ public class AndroidPlatformHelper {
                 continue;
             }
 
-            Log.i("[Platform Helper] Installing Resource " + f);
+            Log.i("[Platform Helper] Installing resource [" + f + "] to [" + file.getAbsolutePath() + "]");
             FileOutputStream lOutputStream = new FileOutputStream(file);
             int readByte;
             byte[] buff = new byte[8048];
@@ -775,16 +793,6 @@ public class AndroidPlatformHelper {
             lOutputStream.close();
             lInputStream.close();
         }
-    }
-
-    private void setNativePreviewWindowIdOnCoreThread(TextureView view) {
-        Runnable runnable = new Runnable() {
-                @Override
-                public void run() {
-                    setNativePreviewWindowId(mNativePtr, view);
-                }
-        };
-        mHandler.post(runnable);
     }
 
     public void setVideoPreviewView(Object view) {
@@ -826,7 +834,13 @@ public class AndroidPlatformHelper {
             @Override
             public void onSurfaceTextureAvailable(SurfaceTexture surface, int width, int height) {
                 Log.i("[Platform Helper] Preview window surface texture [" + surface + "] is available for texture view [" + mPreviewTextureView + "]");
-                setNativePreviewWindowIdOnCoreThread(mPreviewTextureView);
+                Runnable runnable = new Runnable() {
+                    @Override
+                    public void run() {
+                        setNativePreviewWindowId(mNativePtr, mPreviewTextureView);
+                    }
+                };
+                mHandler.post(runnable);
             }
 
             @Override
@@ -838,12 +852,16 @@ public class AndroidPlatformHelper {
             public boolean onSurfaceTextureDestroyed(SurfaceTexture surface) {
                 Log.i("[Platform Helper] Preview surface texture [" + surface + "] destroyed");
 
-                if (mNativePtr != 0 && mPreviewTextureView != null) {
-                    if (surface.equals(mPreviewTextureView.getSurfaceTexture())) {
-                        Log.i("[Platform Helper] Current preview surface texture is no longer available");
-                        mPreviewTextureView = null;
-                        setNativePreviewWindowIdOnCoreThread(null);
-                    }
+                if (mNativePtr != 0 && surface != null && mPreviewTextureView != null && surface.equals(mPreviewTextureView.getSurfaceTexture())) {
+                    Log.i("[Platform Helper] Current preview surface texture is no longer available");
+                    Runnable runnable = new Runnable() {
+                        @Override
+                        public void run() {
+                            mPreviewTextureView = null;
+                            setNativePreviewWindowId(mNativePtr, null);
+                        }
+                    };
+                    mHandler.post(runnable);
                 }
 
                 if (!DeviceUtils.isSurfaceTextureReleased(surface)) {
@@ -863,21 +881,6 @@ public class AndroidPlatformHelper {
             Log.i("[Platform Helper] Preview window surface is directly available for texture view [" + mPreviewTextureView + "]");
             setNativePreviewWindowId(mNativePtr, mPreviewTextureView);
         }
-    }
-
-    private void setNativeVideoWindowIdOnCoreThread(SurfaceTexture view) {
-        Runnable runnable = new Runnable() {
-                @Override
-                public void run() {
-                    setNativeVideoWindowId(mNativePtr, view);
-                }
-        };
-        mHandler.post(runnable);
-    }
-    
-    public synchronized void setImagePreprocessor(Object imagePreprocessor) {
-        Log.e("[Platform Helper] setImagePreprocessor " + imagePreprocessor);
-        setImagePreprocessor(mNativePtr, imagePreprocessor);
     }
 
     public void setVideoRenderingView(Object view) {
@@ -919,7 +922,13 @@ public class AndroidPlatformHelper {
             @Override
             public void onSurfaceTextureAvailable(SurfaceTexture surface, int width, int height) {
                 Log.i("[Platform Helper] Rendering window surface texture [" + surface + "] is available for texture view [" + mVideoTextureView + "]");
-                setNativeVideoWindowIdOnCoreThread(surface);
+                Runnable runnable = new Runnable() {
+                    @Override
+                    public void run() {
+                        setNativeVideoWindowId(mNativePtr, surface);
+                    }
+                };
+                mHandler.post(runnable);
             }
 
             @Override
@@ -934,8 +943,14 @@ public class AndroidPlatformHelper {
                 if (mNativePtr != 0 && mVideoTextureView != null) {
                     if (surface.equals(mVideoTextureView.getSurfaceTexture())) {
                         Log.i("[Platform Helper] Current rendering surface texture is no longer available");
-                        mVideoTextureView = null;
-                        setNativeVideoWindowIdOnCoreThread(null);
+                        Runnable runnable = new Runnable() {
+                            @Override
+                            public void run() {
+                                mVideoTextureView = null;
+                                setNativeVideoWindowId(mNativePtr, null);
+                            }
+                        };
+                        mHandler.post(runnable);
                     }
                 }
 
@@ -957,16 +972,6 @@ public class AndroidPlatformHelper {
             Log.i("[Platform Helper] Rendering window surface is directly available for texture view [" + mVideoTextureView + "]");
             setNativeVideoWindowId(mNativePtr, mVideoTextureView.getSurfaceTexture());
         }
-    }
-
-    private void setParticipantDeviceNativeVideoWindowIdOnCoreThread(long participantDevice, SurfaceTexture view) {
-        Runnable runnable = new Runnable() {
-                @Override
-                public void run() {
-                    setParticipantDeviceNativeVideoWindowId(mNativePtr, participantDevice, view);
-                }
-        };
-        mHandler.post(runnable);
     }
 
     public void setParticipantDeviceVideoRenderingView(long participantDevice, Object view) {
@@ -1012,7 +1017,13 @@ public class AndroidPlatformHelper {
             @Override
             public void onSurfaceTextureAvailable(SurfaceTexture surface, int width, int height) {
                Log.i("[Platform Helper] Rendering participant device's window surface texture [" + surface + "] is available for texture view [" + textureView + "]");
-               setParticipantDeviceNativeVideoWindowIdOnCoreThread(participantDevice, surface);
+               Runnable runnable = new Runnable() {
+                    @Override
+                    public void run() {
+                        setParticipantDeviceNativeVideoWindowId(mNativePtr, participantDevice, surface);
+                    }
+                };
+                mHandler.post(runnable);
             }
 
             @Override
@@ -1022,10 +1033,16 @@ public class AndroidPlatformHelper {
 
             @Override
             public boolean onSurfaceTextureDestroyed(SurfaceTexture surface) {
-               Log.w("[Platform Helper] TextureView [" + surface + "] for participant device has been destroyed");
-               mParticipantTextureView.remove(participantDevice);
-               setParticipantDeviceNativeVideoWindowIdOnCoreThread(participantDevice, null);
-               return true;
+                Log.w("[Platform Helper] TextureView [" + surface + "] for participant device has been destroyed");
+                Runnable runnable = new Runnable() {
+                    @Override
+                    public void run() {
+                        mParticipantTextureView.remove(participantDevice);
+                        setParticipantDeviceNativeVideoWindowId(mNativePtr, participantDevice, null);
+                    }
+                };
+                mHandler.post(runnable);
+                return true;
             }
 
             public void onSurfaceTextureUpdated(SurfaceTexture surface) {
@@ -1303,16 +1320,37 @@ public class AndroidPlatformHelper {
             Log.i("[Platform Helper] Starting foreground file transfer service");
             Intent i = new Intent(mContext, mFileTransferServiceClass);
             DeviceUtils.startForegroundService(mContext, i);
+            mFileTransferServiceNotificationStarted = false;
+            mFileTransferServiceStopPending = false;
             mFileTransferServiceStarted = true;
+        }
+    }
+
+    public void setFileTransferServiceNotificationStarted() {
+        mFileTransferServiceNotificationStarted = true;
+        Log.i("[Platform Helper] File transfer service notification was dispatched");
+
+        if (mFileTransferServiceStopPending) {
+            Log.i("[Platform Helper] File transfer service can now be stopped, doing it");
+            mFileTransferServiceStopPending = false;
+            stopFileTransferService();
         }
     }
 
     public void stopFileTransferService() {
         if (mFileTransferServiceStarted) {
             Log.i("[Platform Helper] Foreground file transfer service is no longer required");
-            Intent i = new Intent(mContext, mFileTransferServiceClass);
-            mContext.stopService(i);
-            mFileTransferServiceStarted = false;
+            if (mFileTransferServiceNotificationStarted) {
+                Intent i = new Intent(mContext, mFileTransferServiceClass);
+                mContext.stopService(i);
+                mFileTransferServiceNotificationStarted = false;
+                mFileTransferServiceStopPending = false;
+                mFileTransferServiceStarted = false;
+                Log.i("[Platform Helper] Foreground file transfer service stopped");
+            } else {
+                mFileTransferServiceStopPending = true;
+                Log.w("[Platform Helper] Trying to stop a foreground service for which notification wasn't dispatched yet, waiting...");
+            }
         }
     }
 
@@ -1331,6 +1369,10 @@ public class AndroidPlatformHelper {
     }
 
     public void processPushNotification(String callId, String payload, boolean isCoreStarting) {
+        Log.i("[Platform Helper] Acquiring platform helper push notification wakelock");
+        WakeLock wakeLock = mPowerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "Push Notification Processing");
+        wakeLock.acquire(20000L);
+        
         if (mCore.isAutoIterateEnabled() && mCore.isInBackground()) {
             // Force the core.iterate() scheduling to a low value to ensure the Core will process what triggered the push notification as quickly as possible
             Log.i("[Platform Helper] Push notification received, scheduling core.iterate() every " + AUTO_ITERATE_TIMER_CORE_START_OR_PUSH_RECEIVED + "ms");
@@ -1340,6 +1382,9 @@ public class AndroidPlatformHelper {
 
         Log.i("[Platform Helper] Notifying Core a push with Call-ID [" + callId + "] has been received");
         processPushNotification(mCore.getNativePointer(), callId, payload, isCoreStarting);
+
+        Log.i("[Platform Helper] Releasing platform helper push notification wakelock");
+        wakeLock.release();
     }
 
     public void startAutoIterate() {
@@ -1496,12 +1541,11 @@ public class AndroidPlatformHelper {
         }
     }
 
-
     public void onBluetoothHeadsetStateChanged() {
         onBluetoothHeadsetStateChanged(500);
     }
 
-    private void onBluetoothHeadsetStateChanged(int delay) {
+    private void onBluetoothHeadsetStateChangedOnCoreThread(int delay) {
         if (mCore != null) {
             if (mCore.getConfig().getInt("audio", "android_monitor_audio_devices", 1) == 0) return;
             
@@ -1514,7 +1558,6 @@ public class AndroidPlatformHelper {
                 }
                 mReloadSoundDevicesScheduled = true;
 
-            
                 Runnable reloadRunnable = new Runnable() {
                     @Override
                     public void run() {
@@ -1532,7 +1575,17 @@ public class AndroidPlatformHelper {
         }
     }
 
-    public void onHeadsetStateChanged(boolean connected) {
+    private void onBluetoothHeadsetStateChanged(int delay) {
+        Runnable bluetoothRunnable = new Runnable() {
+            @Override
+            public void run() {
+                onBluetoothHeadsetStateChangedOnCoreThread(delay);
+            }
+        };
+        dispatchOnCoreThread(bluetoothRunnable);
+    }
+
+    private void onHeadsetStateChangedOnCoreThread(boolean connected) {
         if (mCore != null) {
             if (mCore.getConfig().getInt("audio", "android_monitor_audio_devices", 1) == 0) return;
 
@@ -1545,21 +1598,25 @@ public class AndroidPlatformHelper {
                 }
                 mReloadSoundDevicesScheduled = true;
 
-                Runnable reloadRunnable = new Runnable() {
-                    @Override
-                    public void run() {
-                        Log.i("[Platform Helper] Reloading sound devices");
-                        if (mCore != null) {
-                            reloadSoundDevices(mCore.getNativePointer());
-                            mReloadSoundDevicesScheduled = false;
-                        }
-                    }
-                };
-                dispatchOnCoreThread(reloadRunnable);
+                Log.i("[Platform Helper] Reloading sound devices");
+                if (mCore != null) {
+                    reloadSoundDevices(mCore.getNativePointer());
+                    mReloadSoundDevicesScheduled = false;
+                }
             } else {
                 Log.w("[Platform Helper] Headset state changed but current global state is ", globalState.name(), ", skipping...");
             }
         }
+    }
+
+    public void onHeadsetStateChanged(boolean connected) {
+        Runnable headsetRunnable = new Runnable() {
+            @Override
+            public void run() {
+                onHeadsetStateChangedOnCoreThread(connected);
+            }
+        };
+        dispatchOnCoreThread(headsetRunnable);
     }
 
     public void onBackgroundMode() {
@@ -1617,7 +1674,7 @@ public class AndroidPlatformHelper {
         if (mAudioHelper != null) mAudioHelper.setAudioManagerInNormalMode();
     }
 
-    public synchronized boolean isRingingAllowed() {
+    public synchronized boolean isPlayingSoundAllowed() {
         AudioManager audioManager = (AudioManager) mContext.getSystemService(Context.AUDIO_SERVICE);
         int ringerMode = audioManager.getRingerMode();
         if (ringerMode == AudioManager.RINGER_MODE_SILENT || ringerMode == AudioManager.RINGER_MODE_VIBRATE) {
@@ -1628,8 +1685,86 @@ public class AndroidPlatformHelper {
         return true;
     }
 
+    public void startRinging(Address remoteAddress) {
+        Runnable ringingRunnable = new Runnable() {
+            @Override
+            public void run() {
+                if (mAudioHelper != null && mCore != null) {
+                    mAudioHelper.startRinging(mContext, mCore.getRing(), remoteAddress);
+                }
+            }
+        };
+        dispatchOnCoreThread(ringingRunnable);
+    }
+
     public void stopRinging() {
-        if (mAudioHelper != null) mAudioHelper.stopRinging();
+        Runnable ringingRunnable = new Runnable() {
+            @Override
+            public void run() {
+                if (mAudioHelper != null) mAudioHelper.stopRinging();
+            }
+        };
+        dispatchOnCoreThread(ringingRunnable);
+    }
+
+    public void startVibrating(Address remoteAddress) {
+        Runnable vibratingRunnable = new Runnable() {
+            @Override
+            public void run() {
+                if (mContext.checkSelfPermission(Manifest.permission.VIBRATE) != PackageManager.PERMISSION_GRANTED) {
+                    Log.e("[Platform Helper] VIBRATE permission wasn't granted yet, do not attempt accessing the vibrator");
+                    return;
+                }
+                if (mVibrator != null && mVibrator.hasVibrator()) {
+                    AudioManager audioManager = (AudioManager) mContext.getSystemService(Context.AUDIO_SERVICE);
+                    if (audioManager.getRingerMode() == AudioManager.RINGER_MODE_SILENT) {
+                        if (DeviceUtils.checkIfDoNotDisturbAllowsAllCalls(mContext)) {
+                            Log.i("[Platform Helper] Ringer mode is set to silent unless for calls, so starting vibrator");
+                        } else if (DeviceUtils.checkIfDoNotDisturbAllowsExceptionForFavoriteContacts(mContext)) {
+                            boolean isContactFavorite = DeviceUtils.checkIfIsFavoriteContact(mContext, remoteAddress);
+                            if (isContactFavorite) {
+                                Log.i("[Platform Helper] Ringer mode is set to silent unless for favorite contact, which seems to be the case here, so starting vibrator");
+                            } else {
+                                Log.i("[Platform Helper] Do not vibrate as ringer mode is set to silent and calling username / SIP address isn't part of a favorite contact");
+                                return;
+                            }
+                        } else if (DeviceUtils.checkIfDoNotDisturbAllowsKnownContacts(mContext)) {
+                            boolean isKnownContact = DeviceUtils.checkIfIsKnownContact(mContext, remoteAddress);
+                            if (isKnownContact) {
+                                Log.i("[Platform Helper] Ringer mode is set to silent unless for known contact, which seems to be the case here, so starting vibrator");
+                            } else {
+                                Log.i("[Platform Helper] Do not vibrate as ringer mode is set to silent and calling username / SIP address isn't part of a known contact");
+                                return;
+                            }
+                        } else {
+                            Log.i("[Platform Helper] Do not vibrate as ringer mode is set to silent");
+                            return;
+                        }
+                    }
+
+                    Log.i("[Platform Helper] Starting vibrator");
+                    DeviceUtils.vibrate(mVibrator);
+                    mIsVibrating = true;
+                } else {
+                    Log.e("[Platform Helper] Device doesn't have a vibrator");
+                }
+            }
+        };
+        dispatchOnCoreThread(vibratingRunnable);
+    }
+
+    public void stopVibrating() {
+        Runnable vibratingRunnable = new Runnable() {
+            @Override
+            public void run() {
+                if (mIsVibrating) {
+                    Log.i("[Platform Helper] Stopping vibrator");
+                    mVibrator.cancel();
+                    mIsVibrating = false;
+                }
+            }
+        };
+        dispatchOnCoreThread(vibratingRunnable);
     }
 
     private synchronized Class getServiceClass() {

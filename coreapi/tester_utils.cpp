@@ -107,16 +107,6 @@ long long linphone_friend_get_storage_id(const LinphoneFriend *lf) {
 	return Friend::toCpp(lf)->mStorageId;
 }
 
-LinphoneFriendList *linphone_friend_get_friend_list(const LinphoneFriend *lf) {
-	FriendList *friendList = Friend::toCpp(lf)->mFriendList;
-	return friendList ? friendList->toC() : nullptr;
-}
-
-bctbx_list_t **linphone_friend_list_get_friends_attribute(LinphoneFriendList *lfl) {
-	FriendList::toCpp(lfl)->getFriends();
-	return &FriendList::toCpp(lfl)->mBctbxFriends;
-}
-
 const bctbx_list_t *linphone_friend_list_get_dirty_friends_to_update(const LinphoneFriendList *lfl) {
 	return FriendList::toCpp(lfl)->mBctbxDirtyFriendsToUpdate;
 }
@@ -350,4 +340,15 @@ void linphone_call_restart_main_audio_stream(LinphoneCall *call) {
 
 int linphone_core_get_number_of_duplicated_messages(const LinphoneCore *core) {
 	return core->number_of_duplicated_messages;
+}
+
+void linphone_core_set_account_deletion_timeout(LinphoneCore *core, unsigned int seconds) {
+	L_GET_CPP_PTR_FROM_C_OBJECT(core)->setAccountDeletionTimeout(seconds);
+}
+
+LinphoneChatRoom *
+linphone_core_create_basic_chat_room(LinphoneCore *core, const char *localSipUri, const char *remoteSipUri) {
+	return L_GET_CPP_PTR_FROM_C_OBJECT(core)
+	    ->getOrCreateBasicChatRoomFromUri(L_C_TO_STRING(localSipUri), L_C_TO_STRING(remoteSipUri))
+	    ->toC();
 }

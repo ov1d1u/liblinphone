@@ -36,23 +36,25 @@ SIPConferenceScheduler::SIPConferenceScheduler(const shared_ptr<Core> &core, con
     : ConferenceScheduler(core, account) {
 }
 
-SIPConferenceScheduler::~SIPConferenceScheduler() {
-	if (mSession != nullptr) {
-		mSession->removeListener(this);
-	}
-}
-
-void SIPConferenceScheduler::createOrUpdateConference(const std::shared_ptr<ConferenceInfo> &conferenceInfo,
-                                                      const std::shared_ptr<Address> &creator) {
+void SIPConferenceScheduler::createOrUpdateConference(const std::shared_ptr<ConferenceInfo> &conferenceInfo) {
 
 	shared_ptr<LinphonePrivate::ConferenceParams> conferenceParams = ConferenceParams::create(getCore());
 	conferenceParams->setAccount(getAccount());
 	conferenceParams->enableAudio(conferenceInfo->getCapability(LinphoneStreamTypeAudio));
 	conferenceParams->enableVideo(conferenceInfo->getCapability(LinphoneStreamTypeVideo));
-	conferenceParams->setSubject(mConferenceInfo->getSubject());
+	conferenceParams->enableChat(conferenceInfo->getCapability(LinphoneStreamTypeText));
+	conferenceParams->setUtf8Subject(mConferenceInfo->getUtf8Subject());
 	conferenceParams->setSecurityLevel(mConferenceInfo->getSecurityLevel());
 
 	const auto &startTime = conferenceInfo->getDateTime();
+
+	if (startTime < 0) {
+		lError() << "[Conference Scheduler] [" << this << "] unable to schedule a conference with start time "
+		         << startTime;
+		setState(State::Error);
+		return;
+	}
+
 	conferenceParams->setStartTime(startTime);
 	const auto &duration = conferenceInfo->getDuration();
 	if (duration > 0) {
@@ -65,26 +67,25 @@ void SIPConferenceScheduler::createOrUpdateConference(const std::shared_ptr<Conf
 		invitees.push_back(Conference::createParticipantAddressForResourceList(p));
 	}
 
+	auto ref = getSharedFromThis();
 	const auto &conferenceAddress = conferenceInfo->getUri();
-	mSession =
-	    getCore()->createOrUpdateConferenceOnServer(conferenceParams, creator, invitees, conferenceAddress, this);
+	mSession = getCore()->createOrUpdateConferenceOnServer(conferenceParams, invitees, conferenceAddress,
+	                                                       dynamic_pointer_cast<SIPConferenceScheduler>(ref));
 	if (mSession == nullptr) {
-		lError() << "[Conference Scheduler] [" << this << "] createConferenceOnServer returned a null session!";
+		lError() << "[Conference Scheduler] [" << this
+		         << "]: Unable to create the conference because the SIP session is null!";
 		setState(State::Error);
 		return;
 	}
 
+	// Add the conference listener to the list held by the core in order to ensure that listener function are correctly
+	// called. In fact, object CallSession takes a weak reference of the ConferenceScheduler therefore the core must
+	// hold a strong one
+	getCore()->addConferenceScheduler(ref);
+
 	if ((mConferenceInfo->getDateTime() <= 0) && (getState() == State::AllocationPending)) {
 		// Set start time only if a conference is going to be created
 		mConferenceInfo->setDateTime(ms_time(NULL));
-	}
-
-	if (getState() != State::Error) {
-		// Update conference info in database with updated conference information
-#ifdef HAVE_DB_STORAGE
-		auto &mainDb = getCore()->getPrivate()->mainDb;
-		mainDb->insertConferenceInfo(mConferenceInfo);
-#endif // HAVE_DB_STORAGE
 	}
 }
 
@@ -95,49 +96,21 @@ void SIPConferenceScheduler::onCallSessionSetTerminated(const std::shared_ptr<Ca
 		lError() << "[Conference Scheduler] [" << this
 		         << "] The session to update the conference information of conference "
 		         << (conferenceAddress && conferenceAddress->isValid() ? conferenceAddress->toString()
-		                                                               : std::string("sip:unknown"))
-		         << " did not succesfully establish hence it is likely that the request wasn't taken into account by "
+		                                                               : std::string("sip:"))
+		         << " did not successfully establish hence it is likely that the request wasn't taken into account by "
 		            "the server";
 		setState(State::Error);
 	} else if (getState() != State::Error) {
-		// Do not try to call impromptu conference if a participant updates its informations
-		if ((getState() == State::AllocationPending) && (session->getParams()->getPrivate()->getStartTime() < 0)) {
-			lInfo() << "Automatically rejoining conference " << *remoteAddress;
-			auto new_params = linphone_core_create_call_params(getCore()->getCCore(), nullptr);
-			// Participant with the focus call is admin
-			L_GET_CPP_PTR_FROM_C_OBJECT(new_params)->addCustomContactParameter("admin", Utils::toString(true));
-			std::list<Address> addressesList;
-			for (const auto &participantInfo : mConferenceInfo->getParticipants()) {
-				addressesList.push_back(Conference::createParticipantAddressForResourceList(participantInfo));
-			}
-			addressesList.sort([](const auto &addr1, const auto &addr2) { return addr1 < addr2; });
-			addressesList.unique([](const auto &addr1, const auto &addr2) { return addr1.weakEqual(addr2); });
-
-			if (!addressesList.empty()) {
-				auto content = Content::create();
-				content->setBodyFromUtf8(Utils::getResourceLists(addressesList));
-				content->setContentType(ContentType::ResourceLists);
-				content->setContentDisposition(ContentDisposition::RecipientList);
-				if (linphone_core_content_encoding_supported(getCore()->getCCore(), "deflate")) {
-					content->setContentEncoding("deflate");
-				}
-
-				L_GET_CPP_PTR_FROM_C_OBJECT(new_params)->addCustomContent(content);
-			}
-			const LinphoneVideoActivationPolicy *pol = linphone_core_get_video_activation_policy(getCore()->getCCore());
-			bool_t initiate_video = !!linphone_video_activation_policy_get_automatically_initiate(pol);
-			linphone_call_params_enable_video(
-			    new_params,
-			    static_pointer_cast<MediaSession>(session)->getMediaParams()->videoEnabled() && initiate_video);
-
-			linphone_core_invite_address_with_params_2(getCore()->getCCore(), remoteAddress->toC(), new_params,
-			                                           L_STRING_TO_C(mConferenceInfo->getSubject()), NULL);
-			linphone_call_params_unref(new_params);
-		}
+		// Update conference info in database with updated conference information
+#ifdef HAVE_DB_STORAGE
+		auto &mainDb = getCore()->getPrivate()->mainDb;
+		mainDb->insertConferenceInfo(mConferenceInfo);
+#endif // HAVE_DB_STORAGE
 
 		auto conferenceAddress = remoteAddress;
 		setConferenceAddress(conferenceAddress);
 	}
+	getCore()->removeConferenceScheduler(getSharedFromThis());
 }
 
 void SIPConferenceScheduler::onCallSessionStateChanged(const shared_ptr<CallSession> &session,

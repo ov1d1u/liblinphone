@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010-2023 Belledonne Communications SARL.
+ * Copyright (c) 2010-2024 Belledonne Communications SARL.
  *
  * This file is part of Liblinphone
  * (see https://gitlab.linphone.org/BC/public/liblinphone).
@@ -25,8 +25,6 @@
 #include "call/call.h"
 #include "chat/encryption/encryption-engine.h"
 #include "conference/client-conference.h"
-#include "conference/participant-device.h"
-#include "conference/participant.h"
 #include "core/core-p.h"
 #include "core/core.h"
 #include "linphone/api/c-account.h"
@@ -52,7 +50,7 @@ ClientEktManager::EktContext::EktContext(MSEKTCipherType cipherType, MSCryptoSui
 
 ClientEktManager::EktContext::~EktContext() {
 	lInfo() << "Destroying EktContext [" << this << "]";
-};
+}
 
 MSEKTCipherType ClientEktManager::EktContext::getCipherType() const {
 	return mCipherType;
@@ -111,11 +109,11 @@ void ClientEktManager::EktContext::fillMSParametersSet(MSEKTParametersSet *param
 	params->ekt_cipher_type = mCipherType;
 	params->ekt_srtp_crypto_suite = mCryptoSuite;
 	if (mCipherType == MS_EKT_CIPHERTYPE_AESKW128) {
-		std::copy(mEkt.data(), mEkt.data() + 16, params->ekt_key_value);
+		std::copy_n(mEkt.data(), 16, params->ekt_key_value);
 	} else {
-		std::copy(mEkt.data(), mEkt.data() + 32, params->ekt_key_value);
+		std::copy_n(mEkt.data(), 32, params->ekt_key_value);
 	}
-	std::copy(mCSpi.data(), mCSpi.data() + 14, params->ekt_master_salt);
+	std::copy_n(mCSpi.data(), 14, params->ekt_master_salt);
 	params->ekt_spi = mSSpi;
 	params->ekt_ttl = 0;
 }
@@ -137,7 +135,7 @@ ClientEktManager::ClientEktManager(MSEKTCipherType cipherType, MSCryptoSuite cry
 ClientEktManager::ClientEktManager(const shared_ptr<EktContext> &ektCtx) : mEktCtx(ektCtx) {
 }
 
-void ClientEktManager::init(shared_ptr<ClientConference> rc) {
+void ClientEktManager::init(shared_ptr<ClientConference> &rc) {
 	lInfo() << "Init ClientEktManager [" << this << "]";
 	mClientConf = rc;
 	L_GET_PRIVATE_FROM_C_OBJECT(rc->getCore()->getCCore())->registerListener(this);
@@ -168,9 +166,7 @@ ClientEktManager::~ClientEktManager() {
 }
 
 void ClientEktManager::onNetworkReachable(bool sipNetworkReachable, BCTBX_UNUSED(bool mediaNetworkReachable)) {
-	if (sipNetworkReachable) {
-		subscribe();
-	} else {
+	if (!sipNetworkReachable) {
 		if (mEventSubscribe) {
 			mEventSubscribe->terminate();
 			mEventSubscribe = nullptr;
@@ -179,14 +175,6 @@ void ClientEktManager::onNetworkReachable(bool sipNetworkReachable, BCTBX_UNUSED
 			mEventPublish->terminate();
 			mEventPublish = nullptr;
 		}
-	}
-}
-
-void ClientEktManager::onAccountRegistrationStateChanged(BCTBX_UNUSED(std::shared_ptr<Account> account),
-                                                         LinphoneRegistrationState state,
-                                                         BCTBX_UNUSED(const std::string &message)) {
-	if (state == LinphoneRegistrationOk) {
-		subscribe();
 	}
 }
 
@@ -219,7 +207,7 @@ void ClientEktManager::onStateChanged(ConferenceInterface::State newState) {
 void ClientEktManager::onPublishStateChangedCb(LinphoneEvent *lev, LinphonePublishState state) {
 	auto ev = dynamic_pointer_cast<EventPublish>(Event::toCpp(lev)->getSharedFromThis());
 	auto cbs = ev->getCurrentCallbacks();
-	ClientEktManager *cem = static_cast<ClientEktManager *>(cbs->getUserData());
+	auto cem = static_cast<ClientEktManager *>(cbs->getUserData());
 	switch (state) {
 		case LinphonePublishNone:
 		case LinphonePublishOutgoingProgress:
@@ -268,7 +256,8 @@ void ClientEktManager::subscribe() {
 		mEventSubscribe->getOp()->setFromAddress(localAddress->getImpl());
 		mEventSubscribe->setInternal(true);
 	}
-	lInfo() << *localAddress << " is subscribing to chat room or conference: " << *peerAddress;
+	lInfo() << *localAddress << " is subscribing to chat room or conference: " << *peerAddress
+	        << " to get encryption data";
 	mEventSubscribe->send(nullptr);
 }
 
@@ -283,24 +272,36 @@ void ClientEktManager::createPublish(const list<string> &to) {
 
 int ClientEktManager::checkSSpi(uint16_t eiSSpi, uint16_t ektCtxSSpi) {
 	if (eiSSpi == 0) {
-		lError() << "ClientEktManager::checkSSpi : Unexpected EKT NOTIFY format";
+		lError() << "ClientEktManager::" << __func__ << " : Unexpected EKT NOTIFY format";
 		return 1;
 	}
 	if (ektCtxSSpi == 0) {
-		lInfo() << "ClientEktManager::checkSSpi : Set first SSPI";
+		lInfo() << "ClientEktManager::" << __func__ << " : Set first SSPI";
 		mEktCtx->setSSpi(eiSSpi);
 	} else if (eiSSpi != ektCtxSSpi) {
-		lInfo() << "ClientEktManager::checkSSpi : Data cleaned";
+		lInfo() << "ClientEktManager::" << __func__ << " : Data cleaned";
 		clearData();
-		lInfo() << "ClientEktManager::checkSSpi : Set new SSPI";
+		lInfo() << "ClientEktManager::" << __func__ << " : Set new SSPI";
 		mEktCtx->setSSpi(eiSSpi);
 	} else {
-		lInfo() << "ClientEktManager::checkSSpi : Same SSPI as before";
+		lInfo() << "ClientEktManager::" << __func__ << " : Same SSPI as before";
 	}
 	return 0;
 }
 
-int ClientEktManager::recoverEkt(shared_ptr<EktInfo> ei) {
+void ClientEktManager::getParticipantsRequiringKey(shared_ptr<Dictionary> &dict, list<string> &to) {
+	map<string, Variant> devices;
+	if (dict) devices = dict->getProperties();
+	for (const auto &device : devices) {
+		if (mClientConf.lock()->getMe()->findDevice(Address::create(device.first)) == nullptr) {
+			to.push_back(device.first);
+		} else {
+			lError() << "ClientEktManager::" << __func__ << " : No need to send the ekt to myself";
+		}
+	}
+}
+
+int ClientEktManager::recoverEkt(const shared_ptr<EktInfo> &ei) {
 	map<string, Variant> ciphers;
 	shared_ptr<Dictionary> dict = ei->getCiphers();
 	if (dict) {
@@ -310,35 +311,47 @@ int ClientEktManager::recoverEkt(shared_ptr<EktInfo> ei) {
 	}
 
 	if (ciphers.empty()) {
-		lInfo() << "ClientEktManager::recoverEkt : No ciphertext to decrypt";
-		if (mEktCtx->getCSpi().empty()) lWarning() << "ClientEktManager::notifyReceived : Waiting for an EKT";
+		lInfo() << "ClientEktManager::" << __func__ << " : No ciphertext to decrypt";
+		if (mEktCtx->getCSpi().empty()) lWarning() << "ClientEktManager::" << __func__ << " : Waiting for an EKT";
 		return 2;
 	}
 	if (!ei->getFrom()) {
-		lError() << "ClientEktManager::recoverEkt : Missing from field";
+		lError() << "ClientEktManager::" << __func__ << " : Missing from field";
 		return 3;
 	}
 	if (!dict) {
-		lError() << "ClientEktManager::recoverEkt : No cipher";
+		lError() << "ClientEktManager::" << __func__ << " : No cipher";
 		return 4;
 	}
 	auto myAddr = getAccount()->getContactAddress()->asStringUriOnly();
-	LinphoneBuffer *buffer = dict->getLinphoneBuffer(myAddr);
+	auto buffer = dict->getBuffer(myAddr);
 	if (!buffer) {
-		lError() << "ClientEktManager::recoverEkt : Cipher not found";
+		lError() << "ClientEktManager::" << __func__ << " : Cipher not found";
 		return 5;
 	}
-	vector<uint8_t> cipher(linphone_buffer_get_size(buffer));
-	memcpy(cipher.data(), linphone_buffer_get_content(buffer), linphone_buffer_get_size(buffer));
+	vector<uint8_t> cipher = buffer->getContent();
 	bool success = decrypt(ei->getFrom()->asStringUriOnly(), myAddr, cipher);
 	if (success) {
-		lInfo() << "ClientEktManager::recoverEkt : EKT recovered";
+		lInfo() << "ClientEktManager::" << __func__ << " : EKT recovered";
 		mSelectedEkt = true;
 		MSEKTParametersSet ektParams;
 		mEktCtx->fillMSParametersSet(&ektParams);
 		mClientConf.lock()->getCall()->setEkt(&ektParams);
 	}
 	return 0;
+}
+
+void ClientEktManager::manageParticipantsRequiringKeyAndPublish(list<string> &to) {
+	if (mEventPublish != nullptr && mEventPublish->getState() != LinphonePublishOk &&
+	    mEventPublish->getState() != LinphonePublishNone) {
+		auto it = mWaitingParticipants.end();
+		mWaitingParticipants.splice(it, to);
+	} else {
+		auto it = to.begin();
+		to.splice(it, mWaitingParticipants); // Transfers elements from mWaitingParticipants to the list
+		                                     // to. mWaitingParticipants is now empty().
+		createPublish(to);
+	}
 }
 
 void ClientEktManager::notifyReceived(const Content &content) {
@@ -355,66 +368,31 @@ void ClientEktManager::notifyReceived(const Content &content) {
 	auto ektCtxCSpi = mEktCtx->getCSpi();
 	auto dict = ei->getCiphers();
 	if (eiCSpi.empty() && ektCtxCSpi.empty()) { // We need to generate an EKT
-		lInfo() << "ClientEktManager::notifyReceived : Generation of a new EKT";
+		lInfo() << "ClientEktManager::" << __func__ << " : Generation of a new EKT";
 		mEktCtx->generateEkt();
-		list<string> to;
-		map<string, Variant> devices;
-		if (dict) devices = dict->getProperties();
-		for (auto device : devices) {
-			if (mClientConf.lock()->getMe()->findDevice(Address::create(device.first)) == nullptr) {
-				to.push_back(device.first);
-			} else {
-				lError() << "ClientEktManager::notifyReceived : No need to send the ekt to myself";
-			}
-		}
-		if (mEventPublish != nullptr && mEventPublish->getState() != LinphonePublishOk &&
-		    mEventPublish->getState() != LinphonePublishNone) {
-			auto it = mWaitingParticipants.end();
-			mWaitingParticipants.splice(it, to);
-		} else {
-			auto it = to.begin();
-			to.splice(it, mWaitingParticipants); // Transfers elements from mWaitingParticipants to the list to.
-			                                     // mWaitingParticipants is now empty().
-			createPublish(to);
-		}
+		list<string> to = {};
+		getParticipantsRequiringKey(dict, to);
+		manageParticipantsRequiringKeyAndPublish(to);
 	} else if (!eiCSpi.empty()) {
 		if (ektCtxCSpi.empty() || (ektCtxCSpi != eiCSpi && !mSelectedEkt)) {
 			mEktCtx->setCSpi(eiCSpi); // New CSPI
 			if (recoverEkt(ei) != 0) return;
 		} else if (ektCtxCSpi != eiCSpi && mSelectedEkt) {
-			lError() << "ClientEktManager::notifyReceived : Unexpected CSPI";
+			lError() << "ClientEktManager::" << __func__ << " : Unexpected CSPI";
 			return;
 		} else if (ektCtxCSpi == eiCSpi && mSelectedEkt) {
-			list<string> to;
-			map<string, Variant> devices;
-			if (dict) devices = dict->getProperties();
-			for (auto device : devices) {
-				if (mClientConf.lock()->getMe()->findDevice(Address::create(device.first)) == nullptr) {
-					to.push_back(device.first);
-				} else {
-					lError() << "ClientEktManager::notifyReceived : No need to send the EKT to myself";
-				}
-			}
-			if (to.size() == 0) {
-				lInfo() << "ClientEktManager::notifyReceived : State of EKT is same as before ; No EKT to send";
+			list<string> to = {};
+			getParticipantsRequiringKey(dict, to);
+			if (to.empty()) {
+				lInfo() << "ClientEktManager::" << __func__ << " : State of EKT is same as before ; No EKT to send";
 			} else {
-				if (mEventPublish != nullptr && mEventPublish->getState() != LinphonePublishOk &&
-				    mEventPublish->getState() != LinphonePublishNone) {
-					auto it = mWaitingParticipants.end();
-					mWaitingParticipants.splice(it, to);
-				} else {
-					auto it = to.begin();
-					to.splice(it, mWaitingParticipants); // Transfers elements from mWaitingParticipants to the list
-					                                     // to. mWaitingParticipants is now empty().
-					lInfo() << "ClientEktManager::notifyReceived : Encrypt EKT for new participants";
-					createPublish(to);
-				}
+				manageParticipantsRequiringKeyAndPublish(to);
 			}
 		} else if (ektCtxCSpi == eiCSpi) {
 			if (mEktCtx->getEkt().empty()) {
 				if (recoverEkt(ei) != 0) return;
 			} else {
-				lInfo() << "ClientEktManager::notifyReceived : EKT selected by the conference server";
+				lInfo() << "ClientEktManager::" << __func__ << " : EKT selected by the conference server";
 				mSelectedEkt = true;
 				MSEKTParametersSet ektParams;
 				mEktCtx->fillMSParametersSet(&ektParams);
@@ -424,9 +402,17 @@ void ClientEktManager::notifyReceived(const Content &content) {
 	}
 }
 
-void ClientEktManager::sendPublish(shared_ptr<EktInfo> ei) {
-	auto core = mClientConf.lock()->getCore();
-	string xmlBody = core->createXmlFromEktInfo(ei);
+void ClientEktManager::sendPublish(const shared_ptr<EktInfo> &ei) {
+	auto sharedClientConf = mClientConf.lock();
+	if (!sharedClientConf) {
+		lWarning() << __func__ << " : Ignoring the attempt to send an EKT PUBLISH from a null ClientConference";
+		return;
+	}
+
+	auto core = sharedClientConf->getCore();
+	auto account = sharedClientConf->getAccount();
+
+	string xmlBody = core->createXmlFromEktInfo(ei, account);
 
 	shared_ptr<Content> content = make_shared<Content>();
 	ContentType contentType;
@@ -446,40 +432,40 @@ void ClientEktManager::sendPublish(shared_ptr<EktInfo> ei) {
 	mEventPublish->send(content);
 }
 
-void ClientEktManager::publishCipheredEkt(shared_ptr<EktInfo> ei,
-                                          const bool status,
-                                          std::unordered_map<std::string, std::vector<uint8_t>> cipherTexts) {
+void ClientEktManager::publishCipheredEkt(const shared_ptr<EktInfo> &ei,
+                                          const std::unordered_map<std::string, std::vector<uint8_t>> &cipherTexts,
+                                          bool status) {
 	if (!status) {
-		lError() << "ClientEktManager::encryptAndSendEkt : EKT encryption";
+		lError() << "ClientEktManager::" << __func__ << " : EKT encryption";
 		return;
 	}
 	auto ciphers = make_shared<Dictionary>();
-	LinphoneBuffer *buffer;
-	for (auto cipher : cipherTexts) {
-		buffer = linphone_buffer_new_from_data(cipher.second.data(), cipher.second.size());
+	shared_ptr<Buffer> buffer = nullptr;
+	for (const auto &cipher : cipherTexts) {
+		buffer = make_shared<Buffer>(cipher.second);
 		ciphers->setProperty(cipher.first, buffer);
-		linphone_buffer_unref(buffer);
 	}
 	ei->setCiphers(ciphers);
 
 	sendPublish(ei);
 }
 
-void ClientEktManager::encryptAndSendEkt(shared_ptr<EktInfo> ei,
-                                         const shared_ptr<Address> from,
+void ClientEktManager::encryptAndSendEkt(const shared_ptr<EktInfo> &ei,
+                                         const shared_ptr<Address> &from,
                                          const list<string> &to) {
-	auto plainText = std::make_shared<std::vector<uint8_t>>(mEktCtx->mEkt.begin(), mEktCtx->mEkt.end());
 	vector<uint8_t> associatedData{};
 	associatedData.push_back((uint8_t)((mEktCtx->mSSpi >> 8) & 0xff));
 	associatedData.push_back((uint8_t)((mEktCtx->mSSpi >> 0) & 0xff));
 	associatedData.insert(associatedData.end(), mEktCtx->mCSpi.begin(), mEktCtx->mCSpi.end());
-	auto AD = std::make_shared<std::vector<uint8_t>>(associatedData.begin(), associatedData.end());
 	auto core = mClientConf.lock()->getCore();
 	if (!to.empty()) {
+		weak_ptr<ClientEktManager> ektManagerRef = shared_from_this();
 		core->getEncryptionEngine()->rawEncrypt(
-		    from->asStringUriOnly(), to, plainText, AD,
-		    [this, ei](const bool status, std::unordered_map<std::string, std::vector<uint8_t>> cipherTexts) {
-			    publishCipheredEkt(ei, status, cipherTexts);
+		    from->asStringUriOnly(), to, mEktCtx->mEkt, associatedData,
+		    [ektManagerRef, ei](const bool status,
+		                        const std::unordered_map<std::string, std::vector<uint8_t>> cipherTexts) {
+			    auto sharedEktManager = ektManagerRef.lock();
+			    if (sharedEktManager) sharedEktManager->publishCipheredEkt(ei, cipherTexts, status);
 		    });
 	} else {
 		sendPublish(ei);
@@ -495,7 +481,7 @@ bool ClientEktManager::decrypt(const string &from, const string &to, const vecto
 	bool success =
 	    mClientConf.lock()->getCore()->getEncryptionEngine()->rawDecrypt(to, from, associatedData, cipher, ekt);
 	if (success) mEktCtx->mEkt = ekt;
-	else lInfo() << "EktContext::decrypt - EKT decryption";
+	else lInfo() << "EktContext::" << __func__ << " - EKT decryption";
 	return success;
 }
 

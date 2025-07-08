@@ -28,6 +28,7 @@
 #include "linphone/contactprovider.h"
 #include "linphone/core.h"
 #include "linphone/types.h"
+#include "search/magic-search.h"
 #include <list>
 #include <map>
 #include <string>
@@ -42,7 +43,7 @@ class LdapContactProvider;
 class LINPHONE_PUBLIC LdapContactSearch {
 public:
 	LdapContactSearch(const int &msgId);
-	LdapContactSearch(LdapContactProvider *parent, std::string predicate, ContactSearchCallback cb, void *cbData);
+	LdapContactSearch(LdapContactProvider *parent, std::string predicate, MagicSearchCallback cb, void *cbData);
 	virtual ~LdapContactSearch();
 
 	void callCallback();
@@ -53,12 +54,12 @@ public:
 	std::string mFilter;
 	bool complete;
 	bool mHaveMoreResults = false;
-	std::list<std::shared_ptr<SearchResult>> mFoundEntries;
+	std::list<std::shared_ptr<Friend>> mFoundEntries;
 	unsigned int mFoundCount;
 
 private:
 	std::string mPredicate;
-	ContactSearchCallback mCb;
+	MagicSearchCallback mCb;
 	void *mCbData;
 };
 

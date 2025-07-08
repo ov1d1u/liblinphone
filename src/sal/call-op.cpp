@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010-2022 Belledonne Communications SARL.
+ * Copyright (c) 2010-2024 Belledonne Communications SARL.
  *
  * This file is part of Liblinphone
  * (see https://gitlab.linphone.org/BC/public/liblinphone).
@@ -83,6 +83,15 @@ bool SalCallOp::isContentInRemote(const ContentType &contentType) const {
 }
 
 std::optional<std::reference_wrapper<const Content>>
+SalCallOp::getContentInLocal(const ContentType &contentType) const {
+	auto it = std::find_if(mLocalBodies.begin(), mLocalBodies.end(), [&contentType](const Content &content) {
+		return (content.getContentType() == contentType);
+	});
+	if (it != mLocalBodies.end()) return *it;
+	return nullopt;
+}
+
+std::optional<std::reference_wrapper<const Content>>
 SalCallOp::getContentInRemote(const ContentType &contentType) const {
 	auto it = std::find_if(mRemoteBodies.begin(), mRemoteBodies.end(), [&contentType](const Content &content) {
 		return (content.getContentType() == contentType);
@@ -163,15 +172,18 @@ void SalCallOp::fillInvite(belle_sip_request_t *invite) {
 		sdpContent.setBody(std::move(buffer));
 	} else mSdpOffering = false;
 
-	/* The SDP content must be replaced by the one generated from mLocalMedia */
-	auto it = std::find_if(mLocalBodies.begin(), mLocalBodies.end(),
-	                       [](const Content &content) { return (content.getContentType() == ContentType::Sdp); });
-	if (it != mLocalBodies.end()) {
-		if (sdpContent.isValid()) *it = std::move(sdpContent); // replace with the new SDP
-		else mLocalBodies.erase(it);
-	} else {
-		if (sdpContent.isValid()) mLocalBodies.emplace_back(sdpContent);
+	if (!getSal()->mediaDisabled()) {
+		/* The SDP content must be replaced by the one generated from mLocalMedia */
+		auto it = std::find_if(mLocalBodies.begin(), mLocalBodies.end(),
+		                       [](const Content &content) { return (content.getContentType() == ContentType::Sdp); });
+		if (it != mLocalBodies.end()) {
+			if (sdpContent.isValid()) *it = std::move(sdpContent); // replace with the new SDP
+			else mLocalBodies.erase(it);
+		} else {
+			if (sdpContent.isValid()) mLocalBodies.emplace_back(sdpContent);
+		}
 	}
+
 	if (mLocalBodies.size() > 1) {
 		list<Content *> contents;
 
@@ -179,6 +191,7 @@ void SalCallOp::fillInvite(belle_sip_request_t *invite) {
 			// For backward compatibility, always set SDP as first content in the multipart.
 			if (body.getContentType() == ContentType::Sdp) {
 				contents.push_front(&body);
+				if (getSal()->mediaDisabled()) mSdpOffering = true;
 			} else {
 				contents.push_back(&body);
 			}
@@ -322,6 +335,17 @@ int SalCallOp::parseSdpBody(const Content &body, belle_sdp_session_description_t
 	return 0;
 }
 
+std::shared_ptr<SalMediaDescription> SalCallOp::getSalMediaDescriptionFromContent(const Content &content) {
+	belle_sdp_session_description_t *sdp = nullptr;
+	SalReason reason;
+	if (parseSdpBody(content, &sdp, &reason) == 0) {
+		auto mediaDescription = std::make_shared<SalMediaDescription>(sdp);
+		belle_sip_object_unref(sdp);
+		return mediaDescription;
+	}
+	return nullptr;
+}
+
 std::string SalCallOp::setAddrTo0000(const std::string &value) {
 	if (ms_is_ipv6(value.c_str())) return "::0";
 	else return "0.0.0.0";
@@ -335,6 +359,11 @@ void SalCallOp::sdpProcess() {
 
 	// If SDP was invalid
 	if (!mRemoteMedia) return;
+
+	if (getSal()->mediaDisabled()) {
+		lInfo() << "Media is disabled, no result SDP is generated";
+		return;
+	}
 
 	if (mSdpOffering) {
 		mResult = mRoot->mOfferAnswerEngine.initiateOutgoing(mLocalMedia, mRemoteMedia);
@@ -477,6 +506,9 @@ void SalCallOp::processResponseCb(void *userCtx, const belle_sip_response_event_
 	lInfo() << "Op [" << op << "] receiving call response [" << code << "], dialog is [" << dialog << "] in state ["
 	        << belle_sip_dialog_state_to_string(dialogState) << "]";
 	op->ref(); // To make sure no cb will destroy op
+	if (code != 491) {
+		op->resetRetryFunction(); // Retry function has been either executed or not needed anymore
+	}
 
 	auto request = belle_sip_transaction_get_request(BELLE_SIP_TRANSACTION(clientTransaction));
 	string method = belle_sip_request_get_method(request);
@@ -741,7 +773,7 @@ SalReason SalCallOp::processBodyForInvite(belle_sip_request_t *invite) {
 			SalErrorInfo sei;
 			memset(&sei, 0, sizeof(sei));
 			sal_error_info_set(&sei, reason, "SIP", 0, nullptr, nullptr);
-			declineWithErrorInfo(&sei, nullptr);
+			replyWithErrorInfo(&sei, nullptr);
 			sal_error_info_reset(&sei);
 		}
 	} else {
@@ -1358,60 +1390,6 @@ int SalCallOp::decline(SalReason reason, const string &redirectionUri) {
 	return 0;
 }
 
-belle_sip_header_reason_t *SalCallOp::makeReasonHeader(const SalErrorInfo *info) {
-	if (info && (info->reason != SalReasonNone)) {
-		auto reasonHeader = BELLE_SIP_HEADER_REASON(belle_sip_header_reason_new());
-		belle_sip_header_reason_set_text(reasonHeader, info->status_string);
-		belle_sip_header_reason_set_protocol(reasonHeader, info->protocol);
-		belle_sip_header_reason_set_cause(reasonHeader, info->protocol_code);
-		return reasonHeader;
-	}
-	return nullptr;
-}
-
-int SalCallOp::declineWithErrorInfo(const SalErrorInfo *info, const SalAddress *redirectionAddr, const time_t expire) {
-	belle_sip_header_contact_t *contactHeader = nullptr;
-	belle_sip_header_retry_after_t *retryAfterHeader = nullptr;
-	int status = info->protocol_code;
-
-	if (info->reason == SalReasonRedirect) {
-		if (redirectionAddr) {
-			status = 302;
-			contactHeader = belle_sip_header_contact_create(BELLE_SIP_HEADER_ADDRESS(redirectionAddr));
-		} else {
-			lError() << "Cannot redirect to null";
-		}
-	}
-	auto transaction = BELLE_SIP_TRANSACTION(mPendingServerTransaction);
-	if (!transaction) transaction = BELLE_SIP_TRANSACTION(mPendingUpdateServerTransaction);
-	if (!transaction) {
-		lError() << "SalCallOp::declineWithErrorInfo(): no pending transaction to decline";
-		return -1;
-	}
-	auto response = createResponseFromRequest(belle_sip_transaction_get_request(transaction), status);
-	auto reasonHeader = makeReasonHeader(info->sub_sei);
-	if (info->retry_after > 0) retryAfterHeader = belle_sip_header_retry_after_create(info->retry_after);
-
-	if (reasonHeader) belle_sip_message_add_header(BELLE_SIP_MESSAGE(response), BELLE_SIP_HEADER(reasonHeader));
-
-	if (contactHeader) belle_sip_message_add_header(BELLE_SIP_MESSAGE(response), BELLE_SIP_HEADER(contactHeader));
-
-	if (expire != 0)
-		belle_sip_message_add_header(BELLE_SIP_MESSAGE(response),
-		                             belle_sip_header_create("Expire", std::to_string(expire).c_str()));
-
-	if (info->warnings) {
-		belle_sip_message_add_header(BELLE_SIP_MESSAGE(response), createWarningHeader(info, getToAddress()));
-	}
-
-	if (retryAfterHeader) belle_sip_message_add_header(BELLE_SIP_MESSAGE(response), BELLE_SIP_HEADER(retryAfterHeader));
-	belle_sip_server_transaction_send_response(BELLE_SIP_SERVER_TRANSACTION(transaction), response);
-	if (info->reason == SalReasonRedirect) {
-		mState = State::Terminating;
-	}
-	return 0;
-}
-
 void SalCallOp::haltSessionTimersTimer() {
 	if (mSessionTimersTimer != nullptr) {
 		mRoot->cancelTimer(mSessionTimersTimer);
@@ -1659,7 +1637,7 @@ SalCallOp *SalCallOp::getReplaces() const {
 	// to the remote tag.
 	auto dialog = belle_sip_provider_find_dialog(mRoot->mProvider, call_id, to_tag, from_tag);
 
-	if (!dialog && (to_tag == NULL || strcmp(belle_sip_header_replaces_get_to_tag(mReplaces), "0") == 0)) {
+	if (!dialog && (to_tag == NULL || strcmp(to_tag, "0") == 0)) {
 		// even if not described in rfc3891, in case of very early network switch at caller side, we might receive a
 		// replace header without to-tag. Give a chance to find the early dialog
 		dialog = belle_sip_provider_find_dialog_with_remote_tag(mRoot->mProvider, call_id, from_tag);
@@ -1739,7 +1717,7 @@ int SalCallOp::terminate(const SalErrorInfo *info) {
 		}
 		case BELLE_SIP_DIALOG_NULL:
 			if (mDir == Dir::Incoming) {
-				declineWithErrorInfo(pSei, nullptr);
+				replyWithErrorInfo(pSei, nullptr);
 				mState = State::Terminated;
 			} else if (mPendingClientTransaction) {
 				if (belle_sip_transaction_get_state(BELLE_SIP_TRANSACTION(mPendingClientTransaction)) ==
@@ -1759,7 +1737,7 @@ int SalCallOp::terminate(const SalErrorInfo *info) {
 			break;
 		case BELLE_SIP_DIALOG_EARLY:
 			if (mDir == Dir::Incoming) {
-				declineWithErrorInfo(pSei, nullptr);
+				replyWithErrorInfo(pSei, nullptr);
 				mState = State::Terminated;
 			} else {
 				cancellingInvite(pSei);
@@ -1904,8 +1882,10 @@ void SalCallOp::processRefer(const belle_sip_request_event_t *event,
 		if (referredByHeader) setReferredBy(referredByHeader);
 		auto response = createResponseFromRequest(request, 202);
 		belle_sip_server_transaction_send_response(serverTransaction, response);
-		mRoot->mCallbacks.call_refer_received(this,
-		                                      reinterpret_cast<SalAddress *>(BELLE_SIP_HEADER_ADDRESS(referToHeader)));
+		auto bodyHandler = BELLE_SIP_BODY_HANDLER(getBodyHandler(BELLE_SIP_MESSAGE(request)));
+		mRoot->mCallbacks.call_refer_received(
+		    this, reinterpret_cast<SalAddress *>(BELLE_SIP_HEADER_ADDRESS(referToHeader)),
+		    reinterpret_cast<SalCustomHeader *>(request), reinterpret_cast<SalBodyHandler *>(bodyHandler));
 	} else {
 		lWarning() << "Cannot do anything with the refer without destination";
 		auto response = createResponseFromRequest(request, 400);

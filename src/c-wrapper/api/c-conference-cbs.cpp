@@ -48,6 +48,16 @@ void linphone_conference_cbs_set_user_data(LinphoneConferenceCbs *cbs, void *ud)
 	ConferenceCbs::toCpp(cbs)->setUserData(ud);
 }
 
+LinphoneConferenceCbsAllowedParticipantListChangedCb
+linphone_conference_cbs_get_allowed_participant_list_changed(const LinphoneConferenceCbs *cbs) {
+	return ConferenceCbs::toCpp(cbs)->allowedParticipantListChangedCb;
+}
+
+void linphone_conference_cbs_set_allowed_participant_list_changed(
+    LinphoneConferenceCbs *cbs, LinphoneConferenceCbsAllowedParticipantListChangedCb cb) {
+	ConferenceCbs::toCpp(cbs)->allowedParticipantListChangedCb = cb;
+}
+
 LinphoneConferenceCbsParticipantAddedCb
 linphone_conference_cbs_get_participant_added(const LinphoneConferenceCbs *cbs) {
 	return ConferenceCbs::toCpp(cbs)->participantAddedCb;
@@ -86,6 +96,16 @@ linphone_conference_cbs_get_participant_device_removed(const LinphoneConferenceC
 void linphone_conference_cbs_set_participant_device_removed(LinphoneConferenceCbs *cbs,
                                                             LinphoneConferenceCbsParticipantDeviceRemovedCb cb) {
 	ConferenceCbs::toCpp(cbs)->participantDeviceRemovedCb = cb;
+}
+
+LinphoneConferenceCbsParticipantDeviceJoiningRequestCb
+linphone_conference_cbs_get_participant_device_joining_request(const LinphoneConferenceCbs *cbs) {
+	return ConferenceCbs::toCpp(cbs)->participantDeviceJoiningRequestCb;
+}
+
+void linphone_conference_cbs_set_participant_device_joining_request(
+    LinphoneConferenceCbs *cbs, LinphoneConferenceCbsParticipantDeviceJoiningRequestCb cb) {
+	ConferenceCbs::toCpp(cbs)->participantDeviceJoiningRequestCb = cb;
 }
 
 LinphoneConferenceCbsParticipantRoleChangedCb

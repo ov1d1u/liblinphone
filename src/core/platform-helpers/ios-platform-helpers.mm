@@ -33,6 +33,7 @@
 #include <AVFoundation/AVAudioSession.h>
 
 #include "core/core.h"
+#include "core/core-p.h"
 #include "linphone/core.h"
 #include "linphone/utils/general.h"
 #include "linphone/utils/utils.h"
@@ -53,7 +54,7 @@ using namespace std;
 
 LINPHONE_BEGIN_NAMESPACE
 
-class IosPlatformHelpers : public MacPlatformHelpers {
+class IosPlatformHelpers : public MacPlatformHelpers, public CoreListener {
 public:
 	IosPlatformHelpers (std::shared_ptr<LinphonePrivate::Core> core, void *systemContext);
 	~IosPlatformHelpers () {
@@ -110,7 +111,8 @@ private:
 	void kickOffConnectivity();
 	void bgTaskTimeout ();
 	static void sBgTaskTimeout (void *data);
-    
+    void onGlobalStateChanged (LinphoneGlobalState state) override;
+
 	long int mCpuLockTaskId;
 	int mCpuLockCount;
 	SCNetworkReachabilityRef reachabilityRef = NULL;
@@ -150,6 +152,16 @@ void IosPlatformHelpers::start (std::shared_ptr<LinphonePrivate::Core> core) {
 void IosPlatformHelpers::stop () {
 	mStart = false;
 	ms_message("IosPlatformHelpers is fully stopped");
+}
+
+// Make sure that we register for push notification token after the core is GlobalOn
+// in order to avoid push token being erased by remote provisioning
+void IosPlatformHelpers::onGlobalStateChanged (LinphoneGlobalState state) {
+	if (state == LinphoneGlobalOn) {
+	    if (mUseAppDelgate && linphone_core_is_push_notification_enabled(getCore()->getCCore())) {
+		    [mAppDelegate registerForPush];
+	    }
+	}
 }
 
 void IosPlatformHelpers::didRegisterForRemotePush(void *token) {
@@ -255,14 +267,14 @@ void IosPlatformHelpers::onLinphoneCoreStart(bool monitoringEnabled) {
 	if (monitoringEnabled) {
 		startNetworkMonitoring();
 	}
-	if (mUseAppDelgate && linphone_core_is_push_notification_enabled(getCore()->getCCore())) {
-		[mAppDelegate registerForPush];
-	}
 	if (mUseAppDelgate && linphone_core_is_auto_iterate_enabled(getCore()->getCCore())) {
 		enableAutoIterate(TRUE);
 	} else {
 		ms_warning("[IosPlatformHelpers] Auto core.iterate() isn't enabled, ensure you do it in your application!");
 	}
+    
+    ms_message("[IosPlatformHelpers] Register onGlobalStateChanged listener to request push notification when finished starting");
+    L_GET_PRIVATE(getCore())->registerListener(this);
 }
 
 void IosPlatformHelpers::onLinphoneCoreStop() {
@@ -275,7 +287,12 @@ void IosPlatformHelpers::onLinphoneCoreStop() {
 	if (mUseAppDelgate && linphone_core_is_auto_iterate_enabled(getCore()->getCCore())) {
 		enableAutoIterate(FALSE);
 	}
-
+    
+    try {
+        L_GET_PRIVATE(getCore())->unregisterListener(this);
+    } catch (...) {
+        
+    }
 	// To avoid trigger callbacks of mHandler after linphone core stop
 	[mAppDelegate onStopAsyncEnd:true];
 	getSharedCoreHelpers()->onLinphoneCoreStop();

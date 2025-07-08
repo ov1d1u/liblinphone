@@ -37,27 +37,29 @@ public:
 	void allowMultipart(bool value) override;
 	bool canHandleCpim() const override;
 	bool canHandleMultipart() const override;
-	const std::shared_ptr<ConferenceParams> &getCurrentParams() const override;
+	std::shared_ptr<ConferenceParams> getCurrentParams() const override;
 
 	CapabilitiesMask getCapabilities() const override;
 	bool hasBeenLeft() const override;
 	bool isReadOnly() const override;
 
 	const ConferenceId &getConferenceId() const override;
+	void setConferenceId(const ConferenceId &conferenceId);
+	std::optional<std::reference_wrapper<const std::string>> getIdentifier() const override;
 
 	void invalidateAccount() override;
-	const std::shared_ptr<Account> getAccount() override;
+	std::shared_ptr<Account> getAccount() override;
 
-	const std::string &getSubject() const override;
-	void setSubject(const std::string &subject) override;
+	const std::string &getSubjectUtf8() const override;
 	void setUtf8Subject(const std::string &subject) override;
 
 	void setState(ConferenceInterface::State newState) override;
 	ConferenceInterface::State getState() const override;
 
 	bool isMe(const std::shared_ptr<Address> &address) const override;
-	const std::shared_ptr<Participant> getMe() const override;
-	const std::list<std::shared_ptr<Participant>> getParticipants() const override;
+	std::shared_ptr<Participant> getMe() const override;
+	std::list<std::shared_ptr<Participant>> getParticipants() const override;
+	std::list<std::shared_ptr<Address>> getParticipantAddresses() const override;
 
 protected:
 	explicit BasicChatRoom(const std::shared_ptr<Core> &core,

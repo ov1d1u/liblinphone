@@ -26,10 +26,8 @@ import android.app.NotificationManager;
 import android.app.Service;
 import android.content.Context;
 import android.content.Intent;
-import android.media.AudioManager;
 import android.os.Build;
 import android.os.IBinder;
-import android.os.Vibrator;
 
 import androidx.annotation.RequiresApi;
 import androidx.core.app.NotificationCompat;
@@ -62,9 +60,6 @@ public class CoreService extends Service {
     protected Notification mServiceNotification = null;
 
     private CoreListenerStub mListener;
-    private Vibrator mVibrator;
-    private boolean mIsVibrating;
-    private AudioManager mAudioManager;
 
     private boolean mIsListenerAdded = false;
 
@@ -79,9 +74,6 @@ public class CoreService extends Service {
         if (Version.sdkAboveOrEqual(Version.API26_O_80)) {
             createServiceNotificationChannel();
         }
-
-        mVibrator = (Vibrator) getSystemService(Context.VIBRATOR_SERVICE);
-        mAudioManager = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
 
         mListener = new CoreListenerStub() {
             @Override
@@ -99,8 +91,17 @@ public class CoreService extends Service {
                         startForeground(isVideoEnabled);
                     }
 
-                    if (call.getDir() == Call.Dir.Incoming && core.isVibrationOnIncomingCallEnabled()) {
-                        vibrate(call.getRemoteAddress());
+                    if (call.getDir() == Call.Dir.Incoming) {
+                        if (core.isVibrationOnIncomingCallEnabled()) {
+                            Call.State callState = call.getState();
+                            if (callState == Call.State.IncomingReceived || callState == Call.State.IncomingEarlyMedia) {
+                                vibrate(call.getRemoteAddress());
+                            } else {
+                                Log.i("[Core Service] Vibration is enabled but call state is [" + callState + "], do not vibrate");
+                            }
+                        } else {
+                            Log.i("[Core Service] Vibration for incoming calls isn't enabled, doing nothing");
+                        }
                     }
                 } else {
                     Log.w("[Core Service] Couldn't find current call...");
@@ -110,11 +111,7 @@ public class CoreService extends Service {
             @Override
             public void onCallStateChanged(Core core, Call call, Call.State state, String message) {
                 if (state == Call.State.End || state == Call.State.Error || state == Call.State.Connected) {
-                    if (mIsVibrating) {
-                        Log.i("[Core Service] Stopping vibrator");
-                        mVibrator.cancel();
-                        mIsVibrating = false;
-                    }
+                    stopVibration();
                 }
             }
 
@@ -155,6 +152,8 @@ public class CoreService extends Service {
     @Override
     public synchronized void onDestroy() {
         Log.i("[Core Service] Stopping");
+        
+        stopVibration();
 
         if (AndroidPlatformHelper.isReady()) {
             AndroidPlatformHelper.instance().setServiceRunning(false);
@@ -209,7 +208,7 @@ public class CoreService extends Service {
                         Log.i("[Core Service] Core Manager found, adding our listener");
                         core.addListener(mListener);
                         mIsListenerAdded = true;
-                        Log.i("[Core Service] CoreListener succesfully added to the Core");
+                        Log.i("[Core Service] CoreListener successfully added to the Core");
 
                         if (core.getCallsNb() > 0) {
                             Log.w("[Core Service] Core listener added while at least one call active !");
@@ -222,8 +221,17 @@ public class CoreService extends Service {
                                 startForeground(isVideoEnabled);
 
                                 // Starting Android 10 foreground service is a requirement to be able to vibrate if app is in background
-                                if (call.getDir() == Call.Dir.Incoming && call.getState() == Call.State.IncomingReceived && core.isVibrationOnIncomingCallEnabled()) {
-                                    vibrate(call.getRemoteAddress());
+                                if (call.getDir() == Call.Dir.Incoming) {
+                                    if (core.isVibrationOnIncomingCallEnabled()) {
+                                        Call.State callState = call.getState();
+                                        if (callState == Call.State.IncomingReceived || callState == Call.State.IncomingEarlyMedia) {
+                                            vibrate(call.getRemoteAddress());
+                                        } else {
+                                            Log.i("[Core Service] Vibration is enabled but call state is [" + callState + "], do not vibrate");
+                                        }
+                                    } else {
+                                        Log.i("[Core Service] Vibration for incoming calls isn't enabled, doing nothing");
+                                    }
                                 }
                             } else {
                                 Log.w("[Core Service] Couldn't find current call...");
@@ -327,27 +335,14 @@ public class CoreService extends Service {
     }
 
     private void vibrate(Address caller) {
-        if (mVibrator != null && mVibrator.hasVibrator()) {
-            if (mAudioManager.getRingerMode() == AudioManager.RINGER_MODE_SILENT) {
-                if (DeviceUtils.checkIfDoNotDisturbAllowsExceptionForFavoriteContacts(this)) {
-                    boolean isContactFavorite = DeviceUtils.checkIfIsFavoriteContact(this, caller);
-                    if (isContactFavorite) {
-                        Log.i("[Core Service] Ringer mode is set to silent unless for favorite contact, which seems to be the case here, so starting vibrator");
-                        DeviceUtils.vibrate(mVibrator);
-                        mIsVibrating = true;
-                    } else {
-                        Log.i("[Core Service] Do not vibrate as ringer mode is set to silent and calling username / SIP address isn't part of a favorite contact");
-                    }
-                } else {
-                    Log.i("[Core Service] Do not vibrate as ringer mode is set to silent");
-                }
-            } else {
-                Log.i("[Core Service] Starting vibrator");
-                DeviceUtils.vibrate(mVibrator);
-                mIsVibrating = true;
-            }
-        } else {
-            Log.e("[Core Service] Device doesn't have a vibrator");
+        if (AndroidPlatformHelper.isReady()) {
+            AndroidPlatformHelper.instance().startVibrating(caller);
+        }
+    }
+
+    private void stopVibration() {
+        if (AndroidPlatformHelper.isReady()) {
+            AndroidPlatformHelper.instance().stopVibrating();
         }
     }
 }

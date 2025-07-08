@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010-2022 Belledonne Communications SARL.
+ * Copyright (c) 2010-2025 Belledonne Communications SARL.
  *
  * This file is part of Liblinphone
  * (see https://gitlab.linphone.org/BC/public/liblinphone).
@@ -88,8 +88,14 @@ public:
 	using OnRegisterFailureCb = void (*)(SalOp *op);
 	using OnVfuRequestCb = void (*)(SalOp *op);
 	using OnDtmfReceivedCb = void (*)(SalOp *op, char dtmf);
-	using OnCallReferCb = void (*)(SalOp *op, const SalAddress *referTo);
-	using OnReferCb = void (*)(SalOp *op, const SalAddress *referTo);
+	using OnCallReferCb = void (*)(SalOp *op,
+	                               const SalAddress *referTo,
+	                               const SalCustomHeader *custom_headers,
+	                               const SalBodyHandler *body);
+	using OnReferCb = void (*)(SalOp *op,
+	                           const SalAddress *referTo,
+	                           const SalCustomHeader *custom_headers,
+	                           const SalBodyHandler *body);
 	using OnMessageReceivedCb = void (*)(SalOp *op, const SalMessage *msg);
 	using OnMessageDeliveryUpdateCb = void (*)(SalOp *op, SalMessageDeliveryStatus status);
 	using OnNotifyReferCb = void (*)(SalOp *op, SalReferStatus status);
@@ -313,6 +319,9 @@ public:
 	void setPongTimeout(int value) {
 		belle_sip_stack_set_pong_timeout(mStack, value);
 	}
+	void enablePingPongVerification(bool value) {
+		belle_sip_stack_enable_ping_pong_verification(mStack, value ? TRUE : FALSE);
+	}
 
 	void setUnreliableConnectionTimeout(int value) {
 		belle_sip_stack_set_unreliable_connection_timeout(mStack, value);
@@ -328,6 +337,7 @@ public:
 	void useTcpTlsKeepAlive(bool value) {
 		mUseTcpTlsKeepAlive = value;
 	}
+	void forceNameAddr(bool value);
 	void sendKeepAlive();
 
 	void setDscp(int dscp) {
@@ -426,6 +436,10 @@ public:
 	createTimer(belle_sip_source_func_t func, void *data, unsigned int timeoutValueMs, const std::string &timerName);
 	void cancelTimer(belle_sip_source_t *timer);
 
+	// Media
+	void disableMedia(bool enable);
+	bool mediaDisabled() const;
+
 	// utils
 	static int findCryptoIndexFromAlgo(const std::vector<SalSrtpCryptoAlgo> &crypto, const MSCryptoSuite suite);
 	OfferAnswerEngine &getOfferAnswerEngine() {
@@ -447,6 +461,7 @@ private:
 
 	void setTlsProperties();
 	int addListenPort(SalAddress *addr, bool isTunneled);
+	static belle_sip_header_t *createSupportedHeader(const std::list<std::string> &tags);
 	void makeSupportedHeader();
 	void addPendingAuth(SalOp *op);
 	void removePendingAuth(SalOp *op);
@@ -502,6 +517,7 @@ private:
 	bool mEnableTestFeatures = false;
 	bool mNoInitialRoute = false;
 	bool mEnableSipUpdate = true;
+	bool mDisableMedia = false;
 	SalOpSDPHandling mDefaultSdpHandling = SalOpSDPNormal;
 	bool mPendingTransactionChecking = true; // For testing purposes
 	void *mSslConfig = nullptr;

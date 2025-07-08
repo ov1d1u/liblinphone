@@ -26,6 +26,7 @@
 #include "core/core-p.h"
 #include "linphone/lpconfig.h"
 #include "linphone/wrapper_utils.h"
+#include <locale.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -318,13 +319,26 @@ unsigned int linphone_core_get_audio_features(LinphoneCore *lc) {
 			else if (strcasecmp(name, "MIXED_RECORDING") == 0) ret |= AUDIO_STREAM_FEATURE_MIXED_RECORDING;
 			else if (strcasecmp(name, "LOCAL_PLAYING") == 0) ret |= AUDIO_STREAM_FEATURE_LOCAL_PLAYING;
 			else if (strcasecmp(name, "REMOTE_PLAYING") == 0) ret |= AUDIO_STREAM_FEATURE_REMOTE_PLAYING;
+#ifdef HAVE_BAUDOT
+			else if ((strcasecmp(name, "BAUDOT") == 0) && (linphone_core_baudot_enabled(lc)))
+				ret |= AUDIO_STREAM_FEATURE_BAUDOT;
+#endif /* HAVE_BAUDOT */
 			else if (strcasecmp(name, "ALL") == 0) ret |= AUDIO_STREAM_FEATURE_ALL;
 			else if (strcasecmp(name, "NONE") == 0) ret = 0;
 			else ms_error("Unsupported audio feature %s requested in config file.", name);
 			if (!n) break;
 			p = n;
 		}
-	} else ret = AUDIO_STREAM_FEATURE_ALL;
+	} else {
+		ret = AUDIO_STREAM_FEATURE_ALL;
+#ifdef HAVE_BAUDOT
+		if (!linphone_core_baudot_enabled(lc)) {
+			ret ^= AUDIO_STREAM_FEATURE_BAUDOT;
+		}
+#else
+		ret ^= AUDIO_STREAM_FEATURE_BAUDOT;
+#endif /* !HAVE_BAUDOT */
+	}
 
 	if (ret == AUDIO_STREAM_FEATURE_ALL) {
 		/*since call recording is specified before creation of the stream in linphonecore,
@@ -332,10 +346,6 @@ unsigned int linphone_core_get_audio_features(LinphoneCore *lc) {
 		ret &= (unsigned int)~AUDIO_STREAM_FEATURE_MIXED_RECORDING;
 	}
 	return ret;
-}
-
-bool_t linphone_core_tone_indications_enabled(LinphoneCore *lc) {
-	return !!linphone_config_get_int(lc->config, "sound", "tone_indications", 1);
 }
 
 int linphone_core_get_local_ip_for(int type, const char *dest, char *result) {
@@ -715,6 +725,12 @@ static LinphoneZrtpKeyAgreement MS2_to_Linphone_ZrtpKeyAgreement(MSZrtpKeyAgreem
 			return LinphoneZrtpKeyAgreementK255;
 		case MS_ZRTP_KEY_AGREEMENT_K448:
 			return LinphoneZrtpKeyAgreementK448;
+		case MS_ZRTP_KEY_AGREEMENT_MLK1:
+			return LinphoneZrtpKeyAgreementMlk1;
+		case MS_ZRTP_KEY_AGREEMENT_MLK2:
+			return LinphoneZrtpKeyAgreementMlk2;
+		case MS_ZRTP_KEY_AGREEMENT_MLK3:
+			return LinphoneZrtpKeyAgreementMlk3;
 		case MS_ZRTP_KEY_AGREEMENT_KYB1:
 			return LinphoneZrtpKeyAgreementKyb1;
 		case MS_ZRTP_KEY_AGREEMENT_KYB2:
@@ -727,10 +743,14 @@ static LinphoneZrtpKeyAgreement MS2_to_Linphone_ZrtpKeyAgreement(MSZrtpKeyAgreem
 			return LinphoneZrtpKeyAgreementHqc2;
 		case MS_ZRTP_KEY_AGREEMENT_HQC3:
 			return LinphoneZrtpKeyAgreementHqc3;
+		case MS_ZRTP_KEY_AGREEMENT_K255_MLK512:
+			return LinphoneZrtpKeyAgreementK255Mlk512;
 		case MS_ZRTP_KEY_AGREEMENT_K255_KYB512:
 			return LinphoneZrtpKeyAgreementK255Kyb512;
 		case MS_ZRTP_KEY_AGREEMENT_K255_HQC128:
 			return LinphoneZrtpKeyAgreementK255Hqc128;
+		case MS_ZRTP_KEY_AGREEMENT_K448_MLK1024:
+			return LinphoneZrtpKeyAgreementK448Mlk1024;
 		case MS_ZRTP_KEY_AGREEMENT_K448_KYB1024:
 			return LinphoneZrtpKeyAgreementK448Kyb1024;
 		case MS_ZRTP_KEY_AGREEMENT_K448_HQC256:
@@ -777,6 +797,12 @@ static MSZrtpKeyAgreement Linphone_to_MS2_ZrtpKeyAgreement(LinphoneZrtpKeyAgreem
 			return MS_ZRTP_KEY_AGREEMENT_K255;
 		case LinphoneZrtpKeyAgreementK448:
 			return MS_ZRTP_KEY_AGREEMENT_K448;
+		case LinphoneZrtpKeyAgreementMlk1:
+			return MS_ZRTP_KEY_AGREEMENT_MLK1;
+		case LinphoneZrtpKeyAgreementMlk2:
+			return MS_ZRTP_KEY_AGREEMENT_MLK2;
+		case LinphoneZrtpKeyAgreementMlk3:
+			return MS_ZRTP_KEY_AGREEMENT_MLK3;
 		case LinphoneZrtpKeyAgreementKyb1:
 			return MS_ZRTP_KEY_AGREEMENT_KYB1;
 		case LinphoneZrtpKeyAgreementKyb2:
@@ -789,10 +815,14 @@ static MSZrtpKeyAgreement Linphone_to_MS2_ZrtpKeyAgreement(LinphoneZrtpKeyAgreem
 			return MS_ZRTP_KEY_AGREEMENT_HQC2;
 		case LinphoneZrtpKeyAgreementHqc3:
 			return MS_ZRTP_KEY_AGREEMENT_HQC3;
+		case LinphoneZrtpKeyAgreementK255Mlk512:
+			return MS_ZRTP_KEY_AGREEMENT_K255_MLK512;
 		case LinphoneZrtpKeyAgreementK255Kyb512:
 			return MS_ZRTP_KEY_AGREEMENT_K255_KYB512;
 		case LinphoneZrtpKeyAgreementK255Hqc128:
 			return MS_ZRTP_KEY_AGREEMENT_K255_HQC128;
+		case LinphoneZrtpKeyAgreementK448Mlk1024:
+			return MS_ZRTP_KEY_AGREEMENT_K448_MLK1024;
 		case LinphoneZrtpKeyAgreementK448Kyb1024:
 			return MS_ZRTP_KEY_AGREEMENT_K448_KYB1024;
 		case LinphoneZrtpKeyAgreementK448Hqc256:
@@ -1117,8 +1147,8 @@ void linphone_headers_unref(LinphoneHeaders *obj) {
 	sal_custom_header_unref((SalCustomHeader *)obj);
 }
 
-const char *linphone_headers_get_value(LinphoneHeaders *obj, const char *header_name) {
-	return sal_custom_header_find((SalCustomHeader *)obj, header_name);
+const char *linphone_headers_get_value(const LinphoneHeaders *obj, const char *header_name) {
+	return sal_custom_header_find((const SalCustomHeader *)obj, header_name);
 }
 
 void linphone_headers_add(LinphoneHeaders *obj, const char *name, const char *value) {
@@ -1127,4 +1157,45 @@ void linphone_headers_add(LinphoneHeaders *obj, const char *name, const char *va
 
 void linphone_headers_remove(LinphoneHeaders *obj, const char *name) {
 	sal_custom_header_remove((SalCustomHeader *)obj, name);
+}
+
+/* For c#, the char * or const char * returned by the liblinphone API
+ * are returned as IntPtr.
+ * Indeed, the default Marshall serialization will use CoTaskMemFree() or free() (for non-windows)
+ * in order to free the returned const char* or char *, which is not acceptable as
+ * for the const char* as it will create a memory corruption.
+ * We then use linphone_pointer_to_string() to convert the IntPtr into
+ * a char* that can be consumed by the C# marshaller.
+ */
+char *linphone_pointer_to_string(const void *ptr) {
+	char *ret;
+	if (ptr == NULL) return NULL;
+#ifdef _WIN32
+	size_t len = strlen((const char *)ptr) + 1;
+	ret = (char *)CoTaskMemAlloc(len);
+	memcpy(ret, ptr, len);
+#else
+	ret = strdup((const char *)ptr);
+#endif
+	return ret;
+}
+/* return value needs to be freed with bctbx_free(). */
+void *linphone_string_to_pointer(const char *ptr) {
+	return bctbx_strdup(ptr);
+}
+
+LinphoneStatus linphone_force_utf8(void) {
+	const char *current_setting;
+	setlocale(LC_ALL, ".UTF-8");
+	current_setting = setlocale(LC_ALL, NULL);
+	if (current_setting == NULL) {
+		lError() << "setlocale() failed.";
+		return -1;
+	}
+	if (strstr(current_setting, ".utf-8") == NULL && strstr(current_setting, ".UTF-8") == NULL &&
+	    strstr(current_setting, ".utf8") == NULL) {
+		lError() << "It is unsure that UTF-8 was really set, locale is: " << current_setting;
+		return -1;
+	}
+	return 0;
 }

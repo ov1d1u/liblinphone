@@ -763,14 +763,14 @@ LINPHONE_PUBLIC LinphoneChatRoom *linphone_call_get_chat_room(LinphoneCall *call
 /**
  * Gets the mesured playback volume level (received from remote) in dbm0.
  * @param call The call. @notnil
- * @return float Volume level in percentage.
+ * @return float Volume level in dbm0.
  */
 LINPHONE_PUBLIC float linphone_call_get_play_volume(const LinphoneCall *call);
 
 /**
  * Gets the mesured record volume level (sent to remote) in dbm0.
  * @param call The call. @notnil
- * @return float Volume level in percentage.
+ * @return float Volume level in dbm0.
  */
 LINPHONE_PUBLIC float linphone_call_get_record_volume(const LinphoneCall *call);
 
@@ -914,6 +914,20 @@ LINPHONE_PUBLIC bool_t linphone_call_media_in_progress(const LinphoneCall *call)
  * @param call The #LinphoneCall. @notnil
  */
 LINPHONE_PUBLIC void linphone_call_ogl_render(const LinphoneCall *call);
+
+/**
+ * Returns the local tag of the #LinphoneCall
+ * @param call The #LinphoneCall object @notnil
+ * @return the local tag. @notnil
+ **/
+LINPHONE_PUBLIC const char *linphone_call_get_local_tag(const LinphoneCall *call);
+
+/**
+ * Returns the remote tag of the #LinphoneCall
+ * @param call The #LinphoneCall object @notnil
+ * @return the remote tag. @notnil
+ **/
+LINPHONE_PUBLIC const char *linphone_call_get_remote_tag(const LinphoneCall *call);
 
 /**
  * Sends an info message through an established call
@@ -1078,6 +1092,39 @@ LINPHONE_PUBLIC void linphone_call_accept_transfer(LinphoneCall *call);
  * @return a new #LinphoneEvent @maybenil
  */
 LINPHONE_PUBLIC LinphoneEvent *linphone_call_create_notify(LinphoneCall *call, const char *event);
+
+/**
+ * Indicates whether received Baudot tones should be detected.
+ * The Baudot functionality is to be enabled first by calling linphone_core_enable_baudot().
+ * @param call #LinphoneCall object. @notnil
+ * @param enabled wether or not to detect received Baudot tones.
+ **/
+LINPHONE_PUBLIC void linphone_call_enable_baudot_detection(LinphoneCall *call, bool_t enabled);
+
+/**
+ * Defines the Baudot mode for the call.
+ * The Baudot functionality is to be enabled first by calling linphone_core_enable_baudot().
+ * @param call #LinphoneCall object. @notnil
+ * @param mode The Baudot mode to use for the call.
+ */
+LINPHONE_PUBLIC void linphone_call_set_baudot_mode(LinphoneCall *call, LinphoneBaudotMode mode);
+
+/**
+ * Defines the Baudot standard to use for sending Baudot tones in the call.
+ * The Baudot functionality is to be enabled first by calling linphone_core_enable_baudot().
+ * @param call #LinphoneCall object. @notnil
+ * @param standard The Baudot standard to use for sending Baudot tones.
+ */
+LINPHONE_PUBLIC void linphone_call_set_baudot_sending_standard(LinphoneCall *call, LinphoneBaudotStandard standard);
+
+/**
+ * Set the Baudot significant pause timeout after which a LETTERS tone is retransmitted before resuming transmission (in
+ * seconds). Default is 5s.
+ * The Baudot functionality is to be enabled first by calling linphone_core_enable_baudot().
+ * @param[in] call #LinphoneCall object. @notnil
+ * @param[in] seconds The significant pause timeout in seconds.
+ */
+LINPHONE_PUBLIC void linphone_call_set_baudot_pause_timeout(LinphoneCall *call, uint8_t seconds);
 
 /************ */
 /* DEPRECATED */

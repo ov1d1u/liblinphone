@@ -29,6 +29,7 @@
 #endif
 
 #include "conference/conference.h"
+#include "conference/session/media-session.h"
 #include "content/content-manager.h"
 
 // =============================================================================
@@ -46,14 +47,13 @@ public:
 	static constexpr int sConfIdLength = 32;
 
 	ServerConference(const std::shared_ptr<Core> &core,
-	                 const std::shared_ptr<Address> &myAddress,
-	                 CallSessionListener *listener,
+	                 std::shared_ptr<CallSessionListener> listener,
 	                 const std::shared_ptr<ConferenceParams> params);
 	virtual ~ServerConference();
 
-	virtual int inviteAddresses(const std::list<std::shared_ptr<const Address>> &addresses,
+	virtual int inviteAddresses(const std::list<std::shared_ptr<Address>> &addresses,
 	                            const LinphoneCallParams *params) override;
-	virtual bool dialOutAddresses(const std::list<std::shared_ptr<const Address>> &addressList) override;
+	virtual bool dialOutAddresses(const std::list<std::shared_ptr<Address>> &addressList) override;
 	void inviteDevice(const std::shared_ptr<ParticipantDevice> &device);
 	void byeDevice(const std::shared_ptr<ParticipantDevice> &device);
 
@@ -63,12 +63,13 @@ public:
 	int getParticipantCount() const override;
 
 	virtual bool addParticipants(const std::list<std::shared_ptr<Call>> &call) override;
-	virtual bool addParticipants(const std::list<std::shared_ptr<const Address>> &addresses) override;
+	virtual bool addParticipants(const std::list<std::shared_ptr<Address>> &addresses) override;
 	virtual bool addParticipant(std::shared_ptr<Call> call) override;
 	virtual bool addParticipant(const std::shared_ptr<ParticipantInfo> &info) override;
-	virtual bool addParticipant(const std::shared_ptr<const Address> &participantAddress) override;
+	virtual bool addParticipant(const std::shared_ptr<Address> &participantAddress) override;
 	virtual bool finalizeParticipantAddition(std::shared_ptr<Call> call) override;
-	virtual bool addParticipantDevice(std::shared_ptr<Call> call) override;
+	virtual std::shared_ptr<ParticipantDevice> createParticipantDevice(std::shared_ptr<Participant> participant,
+	                                                                   std::shared_ptr<Call> call) override;
 
 	virtual int removeParticipant(const std::shared_ptr<CallSession> &session, const bool preserveSession) override;
 	virtual int removeParticipant(const std::shared_ptr<Address> &addr) override;
@@ -102,7 +103,6 @@ public:
 	virtual void onConferenceTerminated(const std::shared_ptr<Address> &addr) override;
 	virtual void onFirstNotifyReceived(const std::shared_ptr<Address> &addr) override;
 
-	virtual void setSubject(const std::string &subject) override;
 	virtual const std::shared_ptr<Address> getOrganizer() const override;
 
 	virtual int enter() override;
@@ -126,6 +126,13 @@ public:
 	notifyEphemeralMessageEnabled(time_t creationTime, const bool isFullState, const bool enable) override;
 	virtual std::shared_ptr<ConferenceEphemeralMessageEvent>
 	notifyEphemeralLifetimeChanged(time_t creationTime, const bool isFullState, const long lifetime) override;
+
+	virtual std::shared_ptr<ConferenceParticipantDeviceEvent>
+	notifyParticipantDeviceJoiningRequest(time_t creationTime,
+	                                      const bool isFullState,
+	                                      const std::shared_ptr<Participant> &participant,
+	                                      const std::shared_ptr<ParticipantDevice> &participantDevice) override;
+
 	virtual std::shared_ptr<ConferenceParticipantDeviceEvent>
 	notifyParticipantDeviceAdded(time_t creationTime,
 	                             const bool isFullState,
@@ -159,7 +166,7 @@ public:
 
 	virtual void notifyFullState() override;
 	void confirmCreation();
-	void updateConferenceInformation(SalCallOp *op);
+	bool updateConferenceInformation(SalCallOp *op);
 	virtual std::shared_ptr<Call> getCall() const override;
 
 	virtual void notifyStateChanged(ConferenceInterface::State state) override;
@@ -191,10 +198,6 @@ public:
 
 	virtual void setParticipantAdminStatus(const std::shared_ptr<Participant> &participant, bool isAdmin) override;
 
-	// TODO: move to private once server group chat room class has been deleted
-#ifdef HAVE_ADVANCED_IM
-	std::shared_ptr<ServerConferenceEventHandler> eventHandler;
-#endif // HAVE_ADVANCED_IM
 	void moveDeviceToPresent(const std::shared_ptr<CallSession> &session);
 	void moveDeviceToPresent(const std::shared_ptr<ParticipantDevice> &device);
 	void setParticipantDeviceState(const std::shared_ptr<ParticipantDevice> &device,
@@ -227,6 +230,7 @@ public:
 
 	void confirmJoining(SalCallOp *op);
 	void handleSubjectChange(SalCallOp *op);
+	void setUtf8Subject(const std::string &subject) override;
 
 	virtual LinphoneMediaDirection
 	verifyVideoDirection(const std::shared_ptr<CallSession> &session,
@@ -236,20 +240,26 @@ protected:
 	virtual void onCallSessionStateChanged(const std::shared_ptr<CallSession> &session,
 	                                       CallSession::State state,
 	                                       const std::string &message) override;
+	virtual void onCallSessionEarlyFailed(const std::shared_ptr<CallSession> &session, LinphoneErrorInfo *ei) override;
 
 	virtual void onAckReceived(const std::shared_ptr<CallSession> &session, LinphoneHeaders *headers) override;
+
+	virtual bool addParticipantDevice(std::shared_ptr<Call> call) override;
 
 private:
 	L_DISABLE_COPY(ServerConference);
 
+#ifdef HAVE_ADVANCED_IM
+	std::shared_ptr<ServerConferenceEventHandler> mEventHandler;
+#endif // HAVE_ADVANCED_IM
 	std::unique_ptr<MixerSession> mMixerSession;
 	bool mIsIn = false;
 
 	bool initializeParticipants(const std::shared_ptr<Participant> &initiator, SalCallOp *op);
 	void addParticipantDevice(const std::shared_ptr<Participant> &participant,
-	                          const std::shared_ptr<ParticipantDeviceIdentity> &deviceInfo);
+	                          const std::shared_ptr<ParticipantDeviceIdentity> &deviceInfo) override;
+	bool addParticipantAndDevice(std::shared_ptr<Call> call);
 	bool validateNewParameters(const ConferenceParams &newConfParams) const;
-	bool updateAllParticipantSessionsExcept(const std::shared_ptr<CallSession> &session);
 	std::shared_ptr<CallSession> makeSession(const std::shared_ptr<ParticipantDevice> &device,
 	                                         const MediaSessionParams *csp);
 	void chooseAnotherAdminIfNoneInConference();
@@ -257,6 +267,14 @@ private:
 	std::list<std::shared_ptr<const Address>> getAllowedAddresses() const;
 	virtual void configure(SalCallOp *op) override;
 	void enableScreenSharing(const std::shared_ptr<LinphonePrivate::CallSession> &session, bool notify);
+	MediaSessionParams *updateParameterForParticipantRemoval(const std::shared_ptr<CallSession> &session) const;
+	void terminateConferenceWithReason(const std::shared_ptr<Address> &remoteContactAddress,
+	                                   std::shared_ptr<MediaSession> &session,
+	                                   LinphoneReason reason,
+	                                   int code,
+	                                   const std::string &errorMessage);
+	int checkServerConfiguration(const std::shared_ptr<Address> &remoteContactAddress,
+	                             std::shared_ptr<LinphonePrivate::MediaSession> &session);
 
 	void addLocalEndpoint();
 	void removeLocalEndpoint();
@@ -268,6 +286,7 @@ private:
 	                                bool addToListEventHandler = false) override;
 
 	bool hasAdminLeft() const;
+	bool supportsVideoCapabilities() const;
 
 	void cleanup();
 
@@ -277,7 +296,11 @@ private:
 	                              const std::shared_ptr<Address> &remoteContactAddress,
 	                              bool incomingReceived) const;
 
+	virtual void handleRefer(SalReferOp *op,
+	                         const std::shared_ptr<LinphonePrivate::Address> &referAddr,
+	                         const std::string method) override;
 	virtual bool sessionParamsAllowThumbnails() const override;
+	void setConferenceTimes(time_t startTime, time_t endTime);
 };
 
 LINPHONE_END_NAMESPACE

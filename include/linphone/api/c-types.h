@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010-2022 Belledonne Communications SARL.
+ * Copyright (c) 2010-2024 Belledonne Communications SARL.
  *
  * This file is part of Liblinphone
  * (see https://gitlab.linphone.org/BC/public/liblinphone).
@@ -530,7 +530,7 @@ typedef enum _LinphoneSearchDirection {
 // -----------------------------------------------------------------------------
 /**
  * @brief Object representing all informations present in an Encrypted Key Transport event.
- * @ingroup ekt_info_api
+ * @ingroup ekt_api
  */
 typedef struct _LinphoneEktInfo LinphoneEktInfo;
 
@@ -574,6 +574,7 @@ typedef struct _LinphoneEventLog LinphoneEventLog;
  * Object that represents a LDAP connection.
  * Use a #LinphoneLdapParams object to configure it.
  * @ingroup ldap
+ * @deprecated 18/11/2024 #LinphoneLdap object is no longer used, use #LinphoneRemoteContactDirectory instead.
  */
 typedef struct _LinphoneLdap LinphoneLdap;
 
@@ -636,6 +637,12 @@ typedef enum _LinphoneLdapCheck {
 // -----------------------------------------------------------------------------
 
 /**
+ * @brief The object representing a data buffer.
+ * @ingroup misc
+ */
+typedef struct _LinphoneBuffer LinphoneBuffer;
+
+/**
  * @brief This object holds data that can be embedded in a signaling message or IM message.
  *
  * Use linphone_core_create_content() to create it, and then you should set at least it's
@@ -683,7 +690,8 @@ typedef struct _LinphonePushNotificationConfig LinphonePushNotificationConfig;
  * A #LinphoneMagicSearch is used to search for contacts from various sources:
  * - #LinphoneFriendList
  * - Ldap connection (see #LinphoneLdap)
- * - Call logs and existing chat rooms.
+ * - Remote CardDAV server (see #LinphoneCardDavParams)
+ * - Call logs, conferences and existing chat rooms.
  * @see linphone_magic_search_get_contacts_list_async()
  * @ingroup contacts
  */
@@ -691,17 +699,30 @@ typedef struct _LinphoneMagicSearch LinphoneMagicSearch;
 
 /**
  * #LinphoneMagicSearchCbs is an interface to be notified of results
- * of contact searches initiated from the #LinphoneMagicSearch
+ * of contact searches initiated from the #LinphoneMagicSearch.
  * @see linphone_magic_search_add_callbacks()
  * @ingroup contacts
  */
 typedef struct _LinphoneMagicSearchCbs LinphoneMagicSearchCbs;
 
 /**
- * The #LinphoneSearchResult object represents a result of a search initiated from a #LinphoneMagicSearch
+ * The #LinphoneSearchResult object represents a result of a search initiated from a #LinphoneMagicSearch.
  * @ingroup contacts
  */
 typedef struct _LinphoneSearchResult LinphoneSearchResult;
+
+/**
+ * The #LinphoneCardDavParams object represents a remote CardDAV server used by #LinphoneMagicSearch as a plugin source.
+ * @ingroup contacts
+ */
+typedef struct _LinphoneCardDavParams LinphoneCardDavParams;
+
+/**
+ * Object that represents a remote contact directory such as a LDAP or CardDAV server; used as a #LinphoneMagicSearch
+ * source.
+ * @ingroup contacts
+ */
+typedef struct _LinphoneRemoteContactDirectory LinphoneRemoteContactDirectory;
 
 // -----------------------------------------------------------------------------
 // Digest authentication policy.

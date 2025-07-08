@@ -102,9 +102,9 @@ public:
 
 	static const std::map<PredefinedSubjectType, std::string> predefinedSubject;
 
-	CallSession(const std::shared_ptr<Core> &core, const CallSessionParams *params, CallSessionListener *listener);
-	void addListener(CallSessionListener *listener);
-	void removeListener(CallSessionListener *listener);
+	CallSession(const std::shared_ptr<Core> &core, const CallSessionParams *params);
+	void addListener(std::shared_ptr<CallSessionListener> listener);
+	void removeListener(const std::shared_ptr<CallSessionListener> &listener);
 	void clearListeners();
 	void setStateToEnded();
 	~CallSession();
@@ -144,7 +144,6 @@ public:
 	LinphoneStatus terminate(const LinphoneErrorInfo *ei = nullptr);
 	LinphoneStatus transfer(const std::shared_ptr<CallSession> &dest);
 	LinphoneStatus transfer(const Address &dest);
-	LinphoneStatus transfer(const std::string &dest);
 	LinphoneStatus update(const CallSessionParams *csp,
 	                      const UpdateMethod method = UpdateMethod::Default,
 	                      const std::string &subject = "",
@@ -196,6 +195,10 @@ public:
 	void notifyFirstVideoFrameDecoded();
 	void notifySnapshotTaken(const char *filepath);
 	void notifyRealTimeTextCharacterReceived(RealtimeTextReceivedCharacter *data);
+#ifdef HAVE_BAUDOT
+	void notifyBaudotCharacterReceived(char receivedCharacter);
+	void notifyBaudotDetected(MSBaudotStandard standard);
+#endif /* HAVE_BAUDOT */
 	void notifySendMasterKeyChanged(const std::string key);
 	void notifyReceiveMasterKeyChanged(const std::string key);
 	void notifyUpdateMediaInfoForReporting(const int type);

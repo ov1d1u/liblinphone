@@ -81,6 +81,20 @@ public:
 		time_t timestamp = 0;
 	};
 
+	struct ChatRoomContext {
+		ChatRoomContext(const std::shared_ptr<AbstractChatRoom> &chatRoom,
+		                long long dbId,
+		                bool conferenceIdChanged,
+		                bool updateFlags)
+		    : sChatRoom(chatRoom), sDbId(dbId), sConferenceIdChanged(conferenceIdChanged), sUpdateFlags(updateFlags) {
+		}
+
+		std::shared_ptr<AbstractChatRoom> sChatRoom;
+		long long sDbId = -1;
+		bool sConferenceIdChanged = false;
+		bool sUpdateFlags = false;
+	};
+
 	MainDb(const std::shared_ptr<Core> &core);
 
 	// ---------------------------------------------------------------------------
@@ -143,6 +157,8 @@ public:
 	                                                         const std::list<std::string> &imdnMessageIds) const;
 
 	std::list<std::shared_ptr<ChatMessage>> findChatMessagesFromMessageId(const std::string &messageId) const;
+	std::list<std::shared_ptr<ChatMessage>>
+	findChatMessagesFromImdnMessageId(const std::list<std::string> &imdnMessageIds) const;
 	std::list<std::shared_ptr<ChatMessage>> findChatMessagesFromCallId(const std::string &callId) const;
 
 	std::list<std::shared_ptr<ChatMessage>> findChatMessagesToBeNotifiedAsDelivered() const;
@@ -192,7 +208,7 @@ public:
 	// Chat rooms.
 	// ---------------------------------------------------------------------------
 
-	std::list<std::shared_ptr<AbstractChatRoom>> getChatRooms() const;
+	std::list<std::shared_ptr<AbstractChatRoom>> getChatRooms();
 	void insertChatRoom(const std::shared_ptr<AbstractChatRoom> &chatRoom, unsigned int notifyId = 0);
 	void deleteChatRoom(const ConferenceId &conferenceId);
 	void updateNotifyId(const std::shared_ptr<AbstractChatRoom> &chatRoom, const unsigned int lastNotify);
@@ -248,6 +264,9 @@ public:
 	void migrateConferenceInfos();
 	void cleanupConferenceInfo(time_t expiredBeforeThisTime);
 
+	long long findExpiredConferenceId(const std::shared_ptr<Address> &uri);
+	void insertExpiredConference(const std::shared_ptr<Address> &uri);
+
 	// ---------------------------------------------------------------------------
 	// Call log.
 	// ---------------------------------------------------------------------------
@@ -282,6 +301,7 @@ public:
 	std::list<std::shared_ptr<Friend>> getFriends(const std::shared_ptr<FriendList> &list);
 	std::list<std::shared_ptr<FriendList>> getFriendLists();
 
+	void insertDevices(const std::list<std::pair<std::shared_ptr<Address>, std::string>> &devices);
 	long long insertDevice(const std::shared_ptr<Address> &addressWithGruu, const std::string &displayName);
 	void removeDevice(const std::shared_ptr<Address> &addressWithGruu);
 	std::list<std::shared_ptr<FriendDevice>> getDevices(const std::shared_ptr<Address> &address);
@@ -290,7 +310,7 @@ public:
 	// Other.
 	// ---------------------------------------------------------------------------
 
-	// Import legacy calls/messages from old db.
+	// Import legacy calls/messages from old db. Returns true if something was done.
 	bool import(Backend backend, const std::string &parameters) override;
 
 	static FilterMask getFilterMaskFromHistoryFilterMask(AbstractChatRoom::HistoryFilterMask historyFilterMask);
@@ -301,13 +321,18 @@ protected:
 private:
 	L_DECLARE_PRIVATE(MainDb);
 	L_DISABLE_COPY(MainDb);
-	using ChatRoomWeakCompareMap = std::
-	    unordered_map<ConferenceId, std::shared_ptr<AbstractChatRoom>, ConferenceId::WeakHash, ConferenceId::WeakEqual>;
+	using ChatRoomWeakCompareMap =
+	    std::unordered_map<ConferenceId, ChatRoomContext, ConferenceId::WeakHash, ConferenceId::WeakEqual>;
 	void initCleanup();
-	void addChatroomToList(ChatRoomWeakCompareMap &chatRoomsMap,
-	                       const std::shared_ptr<AbstractChatRoom> &chatRoom) const;
-	std::shared_ptr<AbstractChatRoom> mergeChatRooms(const std::shared_ptr<AbstractChatRoom> chatRoom1,
-	                                                 const std::shared_ptr<AbstractChatRoom> chatRoom2) const;
+	bool addChatroomToList(ChatRoomWeakCompareMap &chatRoomsMap,
+	                       const std::shared_ptr<AbstractChatRoom> &chatRoom,
+	                       long long id,
+	                       int unreadMessageCount) const;
+	std::shared_ptr<AbstractChatRoom> mergeChatRooms(const std::shared_ptr<AbstractChatRoom> &chatRoom1,
+	                                                 const std::shared_ptr<AbstractChatRoom> &chatRoom2,
+	                                                 long long id1,
+	                                                 long long id2,
+	                                                 int unreadMessageCount) const;
 
 	std::string getConferenceInfoTypeQuery(const std::list<LinphoneStreamType> &capabilities) const;
 };

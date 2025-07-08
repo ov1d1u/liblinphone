@@ -39,8 +39,7 @@ class LINPHONE_PUBLIC ClientConference : public Conference, public ConferenceLis
 
 public:
 	ClientConference(const std::shared_ptr<Core> &core,
-	                 const std::shared_ptr<Address> &meAddr,
-	                 CallSessionListener *listener,
+	                 std::shared_ptr<CallSessionListener> listener,
 	                 const std::shared_ptr<const ConferenceParams> params);
 	virtual ~ClientConference();
 
@@ -48,19 +47,20 @@ public:
 	                        const ConferenceId conferenceId,
 	                        const unsigned int lastNotifyId,
 	                        bool hasBeenLeft) override;
-	void initWithFocus(const std::shared_ptr<Address> focusAddr,
-	                   const std::shared_ptr<CallSession> focusSession,
+	void initWithFocus(const std::shared_ptr<const Address> &focusAddr,
+	                   const std::shared_ptr<CallSession> &focusSession,
 	                   SalCallOp *op = nullptr,
 	                   ConferenceListener *confListener = nullptr);
-	virtual int inviteAddresses(const std::list<std::shared_ptr<const Address>> &addresses,
+	virtual int inviteAddresses(const std::list<std::shared_ptr<Address>> &addresses,
 	                            const LinphoneCallParams *params) override;
-	virtual bool dialOutAddresses(const std::list<std::shared_ptr<const Address>> &addressList) override;
+	virtual bool dialOutAddresses(const std::list<std::shared_ptr<Address>> &addressList) override;
 	virtual bool addParticipant(const std::shared_ptr<ParticipantInfo> &info) override;
 	virtual bool addParticipants(const std::list<std::shared_ptr<Call>> &call) override;
-	virtual bool addParticipants(const std::list<std::shared_ptr<const Address>> &addresses) override;
+	virtual bool addParticipants(const std::list<std::shared_ptr<Address>> &addresses) override;
 	virtual bool addParticipant(std::shared_ptr<Call> call) override;
-	virtual bool addParticipant(const std::shared_ptr<const Address> &participantAddress) override;
-	virtual bool addParticipantDevice(std::shared_ptr<Call> call) override;
+	virtual bool addParticipant(const std::shared_ptr<Address> &participantAddress) override;
+	virtual std::shared_ptr<ParticipantDevice> createParticipantDevice(std::shared_ptr<Participant> participant,
+	                                                                   std::shared_ptr<Call> call) override;
 	virtual bool finalizeParticipantAddition(std::shared_ptr<Call> call) override;
 
 	virtual int removeParticipant(const std::shared_ptr<CallSession> &session, const bool preserveSession) override;
@@ -138,7 +138,6 @@ public:
 	                                  const std::shared_ptr<Participant> &participant) override;
 	virtual void onParticipantSetAdmin(const std::shared_ptr<ConferenceParticipantEvent> &event,
 	                                   const std::shared_ptr<Participant> &participant) override;
-	virtual void setSubject(const std::string &subject) override;
 	virtual bool update(const ConferenceParamsInterface &params) override;
 
 	virtual void notifyStateChanged(ConferenceInterface::State state) override;
@@ -161,7 +160,7 @@ public:
 	virtual void onEphemeralLifetimeChanged(const std::shared_ptr<ConferenceEphemeralMessageEvent> &event) override;
 
 #ifdef HAVE_ADVANCED_IM
-	std::shared_ptr<ClientConferenceEventHandler> eventHandler;
+	std::shared_ptr<ClientConferenceEventHandler> mEventHandler;
 #endif // HAVE_ADVANCED_IM
 
 	void requestFullState();
@@ -172,10 +171,11 @@ public:
 
 	void setConferenceId(const ConferenceId &conferenceId);
 	void confirmJoining(SalCallOp *op);
+	void attachCall(const std::shared_ptr<CallSession> &session);
 	AbstractChatRoom::SecurityLevel
 	getSecurityLevelExcept(const std::shared_ptr<ParticipantDevice> &ignoredDevice) const;
 
-	void createFocus(const std::shared_ptr<Address> focusAddr,
+	void createFocus(const std::shared_ptr<const Address> &focusAddr,
 	                 const std::shared_ptr<CallSession> focusSession = nullptr);
 
 	virtual std::pair<bool, LinphoneMediaDirection> getMainStreamVideoDirection(
@@ -186,6 +186,10 @@ public:
 	void onCallSessionStateChanged(const std::shared_ptr<CallSession> &session,
 	                               CallSession::State state,
 	                               const std::string &message) override;
+	void setUtf8Subject(const std::string &subject) override;
+
+	void subscribe(bool addToListEventHandler, bool unsubscribeFirst = true);
+	void unsubscribe();
 
 #ifdef HAVE_ADVANCED_IM
 	std::shared_ptr<LinphonePrivate::ClientEktManager> getClientEktManager() const;
@@ -197,7 +201,7 @@ protected:
 
 private:
 	void acceptSession(const std::shared_ptr<CallSession> &session);
-	std::shared_ptr<CallSession> createSessionTo(const std::shared_ptr<Address> &sessionTo);
+	std::shared_ptr<CallSession> createSessionTo(const std::shared_ptr<const Address> &sessionTo);
 	std::shared_ptr<CallSession> createSession();
 	virtual std::shared_ptr<CallSession> getMainSession() const override;
 	virtual std::shared_ptr<ConferenceInfo> createConferenceInfo() const override;
@@ -209,7 +213,7 @@ private:
 
 	void onFocusCallStateChanged(CallSession::State state, const std::string &message);
 	void onPendingCallStateChanged(std::shared_ptr<Call> call, CallSession::State callState);
-	std::list<Address> cleanAddressesList(const std::list<std::shared_ptr<const Address>> &addresses) const;
+	std::list<Address> cleanAddressesList(const std::list<std::shared_ptr<Address>> &addresses) const;
 
 	virtual void configure(SalCallOp *op) override;
 
@@ -219,7 +223,12 @@ private:
 	                                bool addToListEventHandler = false) override;
 	void initializeHandlers(ConferenceListener *confListener, bool addToListEventHandler);
 
+	virtual void handleRefer(SalReferOp *op,
+	                         const std::shared_ptr<LinphonePrivate::Address> &referAddr,
+	                         const std::string method) override;
 	virtual bool sessionParamsAllowThumbnails() const override;
+
+	void callFocus();
 
 	bool mFinalized = false;
 	bool mScheduleUpdate = false;
@@ -229,6 +238,7 @@ private:
 	std::shared_ptr<Participant> mFocus;
 	std::list<std::shared_ptr<Call>> mPendingCalls;
 	std::list<std::shared_ptr<Call>> mTransferingCalls;
+	MediaSessionParams *mJoiningParams = nullptr;
 
 	uint32_t mDisplayedSpeaker = 0;
 	uint32_t mLouderSpeaker = 0;

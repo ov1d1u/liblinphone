@@ -31,6 +31,7 @@
 #include "linphone/api/c-call-stats.h"
 #include "linphone/wrapper_utils.h"
 #include "player/call-player.h"
+#include "private_functions.h"
 
 // =============================================================================
 
@@ -64,6 +65,14 @@ MediaStream *linphone_call_get_stream(LinphoneCall *call, LinphoneStreamType typ
 
 LinphonePrivate::SalCallOp *linphone_call_get_op(const LinphoneCall *call) {
 	return Call::toCpp(call)->getOp();
+}
+
+const char *linphone_call_get_local_tag(const LinphoneCall *call) {
+	return sal_call_get_local_tag(linphone_call_get_op(call));
+}
+
+const char *linphone_call_get_remote_tag(const LinphoneCall *call) {
+	return sal_call_get_remote_tag(linphone_call_get_op(call));
 }
 
 LinphoneAccount *linphone_call_get_dest_account(const LinphoneCall *call) {
@@ -177,6 +186,10 @@ void linphone_call_notify_audio_device_changed(LinphoneCall *call, LinphoneAudio
 
 void linphone_call_notify_remote_recording(LinphoneCall *call, bool_t recording) {
 	LINPHONE_HYBRID_OBJECT_INVOKE_CBS(Call, Call::toCpp(call), linphone_call_cbs_get_remote_recording, recording);
+}
+
+void linphone_call_notify_baudot_detected(LinphoneCall *call, LinphoneBaudotStandard standard) {
+	LINPHONE_HYBRID_OBJECT_INVOKE_CBS(Call, Call::toCpp(call), linphone_call_cbs_get_baudot_detected, standard);
 }
 
 // =============================================================================
@@ -746,6 +759,26 @@ const LinphoneCallParams *linphone_call_get_params(const LinphoneCall *call) {
 	return L_GET_C_BACK_PTR(Call::toCpp(call)->getParams());
 }
 
+void linphone_call_enable_baudot_detection(LinphoneCall *call, bool_t enabled) {
+	CallLogContextualizer logContextualizer(call);
+	Call::toCpp(call)->enableBaudotDetection(!!enabled);
+}
+
+void linphone_call_set_baudot_mode(LinphoneCall *call, LinphoneBaudotMode mode) {
+	CallLogContextualizer logContextualizer(call);
+	Call::toCpp(call)->setBaudotMode(mode);
+}
+
+void linphone_call_set_baudot_sending_standard(LinphoneCall *call, LinphoneBaudotStandard standard) {
+	CallLogContextualizer logContextualizer(call);
+	Call::toCpp(call)->setBaudotSendingStandard(standard);
+}
+
+void linphone_call_set_baudot_pause_timeout(LinphoneCall *call, uint8_t seconds) {
+	CallLogContextualizer logContextualizer(call);
+	Call::toCpp(call)->setBaudotPauseTimeout(seconds);
+}
+
 // =============================================================================
 // Reference and user data handling functions.
 // =============================================================================
@@ -777,11 +810,10 @@ LinphoneCall *linphone_call_new_outgoing(LinphoneCore *lc,
                                          const LinphoneAddress *to,
                                          const LinphoneCallParams *params,
                                          LinphoneAccount *account) {
-	LinphoneCall *lcall = Call::createCObject(
-	    L_GET_CPP_PTR_FROM_C_OBJECT(lc), LinphoneCallOutgoing, Address::toCpp(from)->getSharedFromThis(),
-	    Address::toCpp(to)->getSharedFromThis(), account ? Account::toCpp(account)->getSharedFromThis() : nullptr,
-	    nullptr, L_GET_CPP_PTR_FROM_C_OBJECT(params));
-
+	LinphoneCall *lcall = Call::createCObject(L_GET_CPP_PTR_FROM_C_OBJECT(lc));
+	Call::toCpp(lcall)->configure(
+	    LinphoneCallOutgoing, Address::toCpp(from)->getSharedFromThis(), Address::toCpp(to)->getSharedFromThis(),
+	    account ? Account::toCpp(account)->getSharedFromThis() : nullptr, nullptr, L_GET_CPP_PTR_FROM_C_OBJECT(params));
 	return lcall;
 }
 
@@ -789,15 +821,16 @@ LinphoneCall *linphone_call_new_incoming(LinphoneCore *lc,
                                          const LinphoneAddress *from,
                                          const LinphoneAddress *to,
                                          LinphonePrivate::SalCallOp *op) {
-	LinphoneCall *lcall = Call::createCObject(L_GET_CPP_PTR_FROM_C_OBJECT(lc), LinphoneCallIncoming,
-	                                          Address::toCpp(from)->getSharedFromThis(),
-	                                          Address::toCpp(to)->getSharedFromThis(), nullptr, op, nullptr);
+	LinphoneCall *lcall = Call::createCObject(L_GET_CPP_PTR_FROM_C_OBJECT(lc));
+	Call::toCpp(lcall)->configure(LinphoneCallIncoming, Address::toCpp(from)->getSharedFromThis(),
+	                              Address::toCpp(to)->getSharedFromThis(), nullptr, op, nullptr);
 	Call::toCpp(lcall)->initiateIncoming();
 	return lcall;
 }
 
 LinphoneCall *linphone_call_new_incoming_with_callid(LinphoneCore *lc, const char *callid) {
-	LinphoneCall *lcall = Call::createCObject(L_GET_CPP_PTR_FROM_C_OBJECT(lc), LinphoneCallIncoming, callid);
+	LinphoneCall *lcall = Call::createCObject(L_GET_CPP_PTR_FROM_C_OBJECT(lc));
+	Call::toCpp(lcall)->configure(LinphoneCallIncoming, callid);
 	return lcall;
 }
 

@@ -80,10 +80,10 @@ void check_video_conference_with_local_participant(bctbx_list_t *participants,
                                                    LinphoneConferenceLayout layout,
                                                    bool_t local_partifipant);
 const char *_linphone_call_get_subject(LinphoneCall *call);
-void _linphone_conference_video_change(bctbx_list_t *lcs,
-                                       LinphoneCoreManager *mgr1,
-                                       LinphoneCoreManager *mgr2,
-                                       LinphoneCoreManager *mgr3);
+LinphoneCoreManager *_linphone_conference_video_change(bctbx_list_t *lcs,
+                                                       LinphoneCoreManager *mgr1,
+                                                       LinphoneCoreManager *mgr2,
+                                                       LinphoneCoreManager *mgr3);
 
 int liblinphone_tester_send_data(const void *buffer, size_t length, const char *dest_ip, int dest_port, int sock_type);
 
@@ -97,6 +97,8 @@ bool_t screen_sharing_enabled_in_negotiated_description(LinphoneCall *call);
 
 bool_t check_custom_m_line(LinphoneCall *call, const char *m_line);
 void check_chat_message_properties(LinphoneChatMessage *msg);
+
+void check_session_error(LinphoneConferenceScheduler *scheduler, LinphoneReason reason);
 
 #ifdef __cplusplus
 }

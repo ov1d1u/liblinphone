@@ -291,7 +291,14 @@ LINPHONE_PUBLIC void linphone_content_set_file_path(LinphoneContent *content, co
  * @param content #LinphoneContent object. @notnil
  * @return The duration of the file in milliseconds or -1 if information isn't available.
  */
-LINPHONE_PUBLIC int linphone_content_get_file_duration(LinphoneContent *content);
+LINPHONE_PUBLIC int linphone_content_get_file_duration(const LinphoneContent *content);
+
+/**
+ * Sets the file duration in seconds (useful for media files for example).
+ * @param content #LinphoneContent object. @notnil
+ * @param duration the duration of the file, in milliseconds.
+ */
+LINPHONE_PUBLIC void linphone_content_set_file_duration(LinphoneContent *content, int duration);
 
 /**
  * Tells whether or not this content contains text.
@@ -330,15 +337,24 @@ LINPHONE_PUBLIC bool_t linphone_content_is_file_transfer(const LinphoneContent *
 
 /**
  * Tells whether or not this content contains an encrypted file
+ * @param content #LinphoneContent object. @notnil
  * @return True is this content contains a file and this file is encrypted, false otherwise.
  */
 LINPHONE_PUBLIC bool_t linphone_content_is_file_encrypted(const LinphoneContent *content);
 
 /**
  * Returns the creation timestamp if this content is a FileContent (received or sent by chat).
+ * @param content #LinphoneContent object. @notnil
  * @return The timestamp at which this content was created if available, -1 otherwise.
  */
 LINPHONE_PUBLIC time_t linphone_content_get_creation_timestamp(const LinphoneContent *content);
+
+/**
+ * Returns the chat message id for which this content is related to, if any.
+ * @param content #LinphoneContent object. @notnil
+ * @return The chat message ID if this content is related to a chat message, NULL otherwise. @maybenil
+ */
+LINPHONE_PUBLIC const char *linphone_content_get_related_chat_message_id(const LinphoneContent *content);
 
 /************ */
 /* DEPRECATED */

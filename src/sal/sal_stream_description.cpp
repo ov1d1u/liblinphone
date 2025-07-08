@@ -430,7 +430,7 @@ void SalStreamDescription::insertOrMergeConfiguration(const unsigned &idx, const
 	const auto sameCfg = std::find_if(cfgs.cbegin(), cfgs.cend(), [&cfg, this](const auto &currentCfg) {
 		// Only potential configurations should be parsed - it is allowed to add a potential configuration identical to
 		// the actual one
-		return ((currentCfg.first != this->getActualConfigurationIndex()) && (currentCfg.second == cfg));
+		return ((currentCfg.first != getActualConfigurationIndex()) && (currentCfg.second == cfg));
 	});
 
 	if (sameCfg == cfgs.cend()) {
@@ -524,7 +524,6 @@ SalStreamDescription::addAcapsToConfiguration(const SalStreamConfiguration &base
 				cfgList.push_back(cfg);
 				cfg = baseCfg;
 			}
-
 		} else if (enc == LinphoneMediaEncryptionZRTP) {
 			for (const auto &attr : attrs) {
 				const auto &capNameValue = attr.second;
@@ -757,6 +756,11 @@ void SalStreamDescription::createActualCfg(const SalMediaDescription *salMediaDe
 			char *extmap_urn = (char *)bctbx_malloc0(strlen(attr_value) + 1);
 			int value = 0;
 			if (sscanf(attr_value, "%i %s", &value, extmap_urn) > 0) {
+				if (value < 1 || value > 15) {
+					lError() << "Extmap value out of range for \"" << extmap_urn << "\"";
+					continue;
+				}
+
 				if (strcasecmp(extmap_urn, "urn:ietf:params:rtp-hdrext:sdes:mid") == 0) {
 					actualCfg.mid_rtp_ext_header_id = value;
 				} else if (strcasecmp(extmap_urn, "urn:ietf:params:rtp-hdrext:csrc-audio-level") == 0) {
@@ -1212,8 +1216,8 @@ SalStreamDescription::toSdpMediaDescription(const SalMediaDescription *salMediaD
 		bctbx_free(value);
 	}
 
-	if (actualCfg.conference_ssrc) {
-		char *ssrc_attribute = ms_strdup_printf("%u", actualCfg.conference_ssrc);
+	if ((actualCfg.conference_ssrc != 0) && !actualCfg.rtcp_cname.empty()) {
+		char *ssrc_attribute = ms_strdup_printf("%u cname:%s", actualCfg.conference_ssrc, actualCfg.rtcp_cname.c_str());
 		belle_sdp_media_description_add_attribute(media_desc, belle_sdp_attribute_create("ssrc", ssrc_attribute));
 		ms_free(ssrc_attribute);
 	}
@@ -1586,6 +1590,9 @@ void SalStreamDescription::applyRtcpFbAttributeToPayload(SalStreamConfiguration 
 					break;
 			}
 			break;
+		case BELLE_SDP_RTCP_FB_GOOG_REMB:
+			cfg.rtcp_fb.goog_remb_enabled = true;
+			break;
 		default:
 			break;
 	}
@@ -1639,6 +1646,9 @@ void SalStreamDescription::addRtcpFbAttributesToSdp(const SalStreamConfiguration
 	}
 	if (cfg.rtcp_fb.tmmbr_enabled == TRUE) {
 		add_rtcp_fb_ccm_attribute(media_desc, -1, BELLE_SDP_RTCP_FB_TMMBR);
+	}
+	if (cfg.rtcp_fb.goog_remb_enabled == TRUE) {
+		add_rtcp_fb_goog_remb_attribute(media_desc, -1);
 	}
 
 	for (const auto &pt : cfg.payloads) {

@@ -28,11 +28,19 @@ LINPHONE_BEGIN_NAMESPACE
 const std::string ParticipantInfo::sequenceParameter = "X-SEQ";
 const std::string ParticipantInfo::roleParameter = "X-ROLE";
 
+ParticipantInfo::ParticipantInfo(const std::string &ccmpUri) {
+	mCcmpUri = ccmpUri;
+}
+
 ParticipantInfo::ParticipantInfo(const std::shared_ptr<const Address> &address) {
-	mAddress = Address::create(address->getUri());
+	setAddress(address);
 }
 
 ParticipantInfo::~ParticipantInfo() {
+	if (mCcmpUriCstr) {
+		ms_free(mCcmpUriCstr);
+		mCcmpUriCstr = nullptr;
+	}
 }
 
 ParticipantInfo *ParticipantInfo::clone() const {
@@ -40,10 +48,15 @@ ParticipantInfo *ParticipantInfo::clone() const {
 }
 
 ParticipantInfo::ParticipantInfo(const ParticipantInfo &other) : HybridObject(other) {
+	mCcmpUri = other.mCcmpUri;
 	mAddress = other.mAddress;
 	mRole = other.mRole;
 	mSequence = other.mSequence;
 	mParameters = other.mParameters;
+}
+
+void ParticipantInfo::setAddress(const std::shared_ptr<const Address> &address) {
+	mAddress = Address::create(address->getUri());
 }
 
 const std::shared_ptr<Address> &ParticipantInfo::getAddress() const {
@@ -56,6 +69,25 @@ void ParticipantInfo::setRole(Participant::Role role) {
 
 Participant::Role ParticipantInfo::getRole() const {
 	return mRole;
+};
+
+void ParticipantInfo::setCcmpUri(const std::string &ccmpUri) {
+	mCcmpUri = ccmpUri;
+};
+
+const char *ParticipantInfo::getCcmpUriCstr() const {
+	if (mCcmpUriCstr) {
+		ms_free(mCcmpUriCstr);
+		mCcmpUriCstr = nullptr;
+	}
+	if (!mCcmpUri.empty()) {
+		mCcmpUriCstr = ms_strdup(mCcmpUri.c_str());
+	}
+	return mCcmpUriCstr;
+};
+
+std::string ParticipantInfo::getCcmpUri() const {
+	return mCcmpUri;
 };
 
 void ParticipantInfo::setSequenceNumber(const int &nb) {

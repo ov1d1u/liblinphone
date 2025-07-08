@@ -24,24 +24,43 @@
 #include <list>
 #include <memory>
 #include <queue>
+#include <regex>
 #include <string>
+
+#include "c-wrapper/c-wrapper.h"
+#include "linphone/api/c-callbacks.h"
+#include "linphone/api/c-types.h"
+
+#include "linphone/api/c-types.h"
+#include "linphone/types.h"
+
+#include "linphone/utils/general.h"
 
 #include "core/core-accessor.h"
 #include "core/core.h"
+#include "magic-search-plugin.h"
+#include "search-async-data.h"
 #include "search-request.h"
 #include "search-result.h"
 
 LINPHONE_BEGIN_NAMESPACE
 
-class MagicSearchPrivate;
-class SearchAsyncData;
+class MagicSearchCbs;
 
-class LINPHONE_PUBLIC MagicSearch : public CoreAccessor, public Object {
+typedef void (*MagicSearchCallback)(std::list<std::shared_ptr<Friend>> friends, void *data, bool_t haveMoreResults);
+
+class LINPHONE_PUBLIC MagicSearch : public bellesip::HybridObject<LinphoneMagicSearch, MagicSearch>,
+                                    public UserDataAccessor,
+                                    public CallbacksHolder<MagicSearchCbs>,
+                                    public CoreAccessor {
 public:
 	friend class SearchAsyncData;
+
 	MagicSearch(const std::shared_ptr<Core> &core);
 	MagicSearch(const MagicSearch &ms) = delete;
 	virtual ~MagicSearch();
+
+	MagicSearch *clone() const override;
 
 	/**
 	 * Set the minimum value used to calculate the weight in search
@@ -163,19 +182,52 @@ public:
 	// When a new search start, let MagicSearch to clean its cache. Default to true.
 	void setAutoResetCache(const bool &enable);
 
-private:
+	/**
+	 * @brief arePluginsProcessingDone Check if all Async processes are done.
+	 * Test if getting addresses is over. It will cancel all providers that reach their timeout (this mecanism is an
+	 * addition to the provider cancellation to make sure to stop all processes).
+	 * @param asyncData Instance to use for all data storage.
+	 * @return true if all is over.
+	 */
+	bool arePluginsProcessingDone(SearchAsyncData *asyncData) const;
+
+	/**
+	 * @brief mergeResults Merge all the providers results and build the final search vector, accessible with
+	 * mSearchResults. It sorts on display name and if equal, the sort will be in this order : Friend's display name,
+	 * address username, address domain, phone number
+	 * @param asyncData Instance to use for all data storage.
+	 */
+	void mergeResults(SearchAsyncData *asyncData);
+
+	/**
+	 * Search informations in address given
+	 * @param[in] lAddress address whose informations will be check
+	 * @param[in] withDomain domain which we want to search only
+	 * @private
+	 **/
+	unsigned int searchInAddress(const std::shared_ptr<const Address> &lAddress, const std::string &withDomain) const;
+
+	/** Inits all magic search plugins, allowing external sources to be used, such as LDAP or distant CardDAV queries */
+	void initPlugins();
+
+	/** Returns whether the magic search plugin should make sure the returned results match the filter or not */
+	bool filterPluginsResults() const;
+
 	/**
 	 * @return the cache of precedent result
 	 * @private
 	 **/
-	std::shared_ptr<std::list<std::shared_ptr<SearchResult>>> getSearchCache() const;
+	const std::list<std::shared_ptr<SearchResult>> &getSearchCache() const;
 
 	/**
 	 * Save a result for future search
 	 * @param[in] cache result we want to save
 	 * @private
 	 **/
-	void setSearchCache(std::shared_ptr<std::list<std::shared_ptr<SearchResult>>> cache);
+	void setSearchCache(std::list<std::shared_ptr<SearchResult>> cache);
+
+	/** Get SearchResults matching Friends in all FriendLists available in Core */
+	std::list<std::shared_ptr<SearchResult>> getResultsFromFriends(bool onlyStarred, const std::string &withDomain);
 
 	/**
 	 * Get all addresses from call log
@@ -216,18 +268,6 @@ private:
 	                              const std::string &withDomain,
 	                              const std::list<std::shared_ptr<SearchResult>> &currentList) const;
 
-#ifdef LDAP_ENABLED
-	/**
-	 * Get all addresses from LDAP Server
-	 * @param[in] filter word we search
-	 * @param[in] withDomain domain which we want to search only
-	 * @return all address from chat rooms participants which match in a SearchResult list
-	 * @private
-	 **/
-	std::list<std::list<std::shared_ptr<SearchResult>>> getAddressFromLDAPServer(const std::string &filter,
-	                                                                             const std::string &withDomain);
-#endif
-
 	/**
 	 * Get all friends as SearchResult
 	 * @param[in] withDomain domain which we want to search only
@@ -243,47 +283,47 @@ private:
 	 * @param[in] sourceFlags Flags where to search #LinphoneMagicSearchSource
 	 * @private
 	 **/
-	std::shared_ptr<std::list<std::shared_ptr<SearchResult>>>
+	std::list<std::shared_ptr<SearchResult>>
 	beginNewSearch(const std::string &filter, const std::string &withDomain, int sourceFlags);
 
 	/**
 	 * Continue the search from the cache of precedent search
-	 * @param[in] filter word we search
 	 * @param[in] withDomain domain which we want to search only
+	 * @param[in] aggregation #LinphoneMagicSearchAggregation to use (Friend or None)
 	 * @private
 	 **/
-	std::shared_ptr<std::list<std::shared_ptr<SearchResult>>> continueSearch(const std::string &filter,
-	                                                                         const std::string &withDomain) const;
+	std::list<std::shared_ptr<SearchResult>> continueSearch(const std::string &withDomain,
+	                                                        LinphoneMagicSearchAggregation aggregation) const;
 
 	/**
 	 * Search informations in friend given
 	 * @param[in] lFriend friend whose informations will be check
-	 * @param[in] filter word we search
 	 * @param[in] withDomain domain which we want to search only
+	 * @param[in] flags flags to set in SearchResult(s)
 	 * @return list of result from friend
 	 * @private
 	 **/
 	std::list<std::shared_ptr<SearchResult>>
-	searchInFriend(LinphoneFriend *lFriend, const std::string &filter, const std::string &withDomain) const;
+	searchInFriend(const std::shared_ptr<Friend> &lFriend, const std::string &withDomain, int flags) const;
 
 	/**
-	 * Search informations in address given
-	 * @param[in] lAddress address whose informations will be check
-	 * @param[in] filter word we search
+	 * Creates a search result from a given friend.
+	 * @param[in] lFriend friend to use (no check will be made)
 	 * @param[in] withDomain domain which we want to search only
+	 * @param[in] flags flags to set in SearchResult(s)
+	 * @return result from friend
 	 * @private
 	 **/
-	unsigned int
-	searchInAddress(const LinphoneAddress *lAddress, const std::string &filter, const std::string &withDomain) const;
+	std::shared_ptr<SearchResult>
+	createResultFromFriend(const std::shared_ptr<Friend> &lFriend, const std::string &withDomain, int flags) const;
 
 	/**
 	 * Return a weight for a searched in with a filter
-	 * @param[in] stringWords which where we are searching
-	 * @param[in] filter what we are searching
+	 * @param[in] haystack which where we are searching
 	 * @return calculate weight
 	 * @private
 	 **/
-	unsigned int getWeight(const std::string &stringWords, const std::string &filter) const;
+	unsigned int getWeight(const std::string &haystack) const;
 
 	/**
 	 * Return if the given address match domain policy
@@ -292,14 +332,19 @@ private:
 	 * @param[in] withDomain domain policy
 	 * @private
 	 **/
-	bool
-	checkDomain(const LinphoneFriend *lFriend, const LinphoneAddress *lAddress, const std::string &withDomain) const;
+	bool checkDomain(const std::shared_ptr<Friend> &lFriend,
+	                 const std::shared_ptr<const Address> &lAddress,
+	                 const std::string &withDomain) const;
 
-	void addResultsToResultsList(std::list<std::shared_ptr<SearchResult>> &results,
-	                             std::list<std::shared_ptr<SearchResult>> &srL) const;
+	/** Adds all results items at the end of the resultsList list */
+	void addResultsToResultsList(const std::list<std::shared_ptr<SearchResult>> &results,
+	                             std::list<std::shared_ptr<SearchResult>> &resultsList) const;
 
-	void uniqueItemsList(std::shared_ptr<std::list<std::shared_ptr<SearchResult>>> list) const;
-	void uniqueFriendsInList(std::shared_ptr<std::list<std::shared_ptr<SearchResult>>> list) const;
+	/** Removes duplicates from list, using Address to tell if same or not */
+	void uniqueItemsList(std::list<std::shared_ptr<SearchResult>> &list) const;
+
+	/** Removes duplicates from list, using Friend to tell if same or not */
+	void uniqueFriendsInList(std::list<std::shared_ptr<SearchResult>> &list) const;
 
 	enum { STATE_START, STATE_WAIT, STATE_SEND, STATE_END, STATE_CANCEL };
 
@@ -310,43 +355,12 @@ private:
 	 * @return true if results are already available (coming from cache).
 	 */
 	bool getContactListFromFilterStartAsync(const SearchRequest &request, SearchAsyncData *asyncData);
-#ifdef LDAP_ENABLED
-	/**
-	 * @brief getAddressFromLDAPServerStartAsync Initialize SearchAsyncData to add LDAP providers for a request on
-	 * addresses. It is called from Iterate to auto start the process when ready.
-	 * @param filter word we search.
-	 * @param withDomain domain which we want to search only.
-	 * @param asyncData Instance to use for all data storage.
-	 */
-	void getAddressFromLDAPServerStartAsync(const std::string &filter,
-	                                        const std::string &withDomain,
-	                                        SearchAsyncData *asyncData) const;
-#endif
-
-	/**
-	 * @brief getAddressIsEndAsync Check if all Async processes are done.
-	 * Test if getting addresses is over. It will cancel all providers that reach their timeout (this mecanism is an
-	 * addition to the provider cancellation to make sure to stop all processes).
-	 * @param asyncData Instance to use for all data storage.
-	 * @return true if all is over.
-	 */
-	bool getAddressIsEndAsync(SearchAsyncData *asyncData) const;
-
-	/**
-	 * @brief mergeResults Merge all the providers results and build the final search vector, accessible with
-	 * mSearchResults. It sorts on display name and if equal, the sort will be in this order : Friend's display name,
-	 * address username, address domain, phone number
-	 * @param request : #SearchRequest that define filter, domain which we want to search only and source flags where to
-	 * search (#LinphoneMagicSearchSource)
-	 * @param asyncData Instance to use for all data storage.
-	 */
-	void mergeResults(const SearchRequest &request, SearchAsyncData *asyncData);
 
 	/**
 	 * @brief processResults Clean for unique items and set the cache.
 	 * @return the cleaned list.
 	 */
-	std::list<std::shared_ptr<SearchResult>> processResults(std::shared_ptr<std::list<std::shared_ptr<SearchResult>>>);
+	std::list<std::shared_ptr<SearchResult>> processResults(std::list<std::shared_ptr<SearchResult>> &results);
 
 	/**
 	 * @brief beginNewSearchAsync Same as beginNewSearch but on an asynchronous version : it will build the
@@ -355,22 +369,8 @@ private:
 	 * search (#LinphoneMagicSearchSource)
 	 * @param asyncData Instance to use for all data storage.
 	 */
-	void beginNewSearchAsync(const SearchRequest &request, SearchAsyncData *asyncData) const;
+	void beginNewSearchAsync(const SearchRequest &request, SearchAsyncData *asyncData);
 
-	/**
-	 * @brief addResultsToResultsList Same as addResultsToResultsList but apply an unicity filtering before splicing. It
-	 * is usefull to prioritize results based to the order of providers.
-	 * @param results List of #SearchResult to add.
-	 * @param srL List of #SearchResult to modify.
-	 * @param filter word we search.
-	 * @param withDomain domain which we want to search only.
-	 */
-	void addResultsToResultsList(std::list<std::shared_ptr<SearchResult>> &results,
-	                             std::list<std::shared_ptr<SearchResult>> &srL,
-	                             const std::string filter,
-	                             const std::string &withDomain) const;
-
-	int mState;
 	/**
 	 * @brief iterate Iteration that is executed in the main loop.
 	 * State follows this flow:
@@ -379,7 +379,56 @@ private:
 	 */
 	bool iterate(void);
 
-	L_DECLARE_PRIVATE(MagicSearch);
+private:
+	void setupRegex(const std::string &filter);
+
+	int mState = 0;
+	unsigned int mMinWeight = 0;
+	unsigned int mMaxWeight = 1000;
+	unsigned int mSearchLimit = 30; // Number of ResultSearch maximum when the search is limited
+	bool mLimitedSearch = true;     // Limit the search
+	int mRequestDelay = 500;        // Delay the first request in ms
+	std::string mDelimiter = "+_-"; // Delimiter use for the search
+	bool mUseDelimiter = true;
+	std::string mFilter;
+	bool mAutoResetCache = true; // When a new search start, let MagicSearch to clean its cache
+	bool returnEmptyFriends = false;
+	std::string mFilterRegex;
+	bool mFilterApplyFullSipUri =
+	    false; // If true, searchInAddress will check the full SIP URI, otherwise only display name & username
+
+	belle_sip_source_t *mIteration = nullptr;
+
+	std::list<std::shared_ptr<SearchResult>> mCacheResult;
+	SearchAsyncData mAsyncData;
+	std::list<std::shared_ptr<MagicSearchPlugin>> mPlugins;
+};
+
+class MagicSearchCbs : public bellesip::HybridObject<LinphoneMagicSearchCbs, MagicSearchCbs>, public Callbacks {
+public:
+	LinphoneMagicSearchCbsSearchResultsReceivedCb getResultsReceived() const {
+		return mResultsAvailableCb;
+	}
+	void setResultsReceived(LinphoneMagicSearchCbsSearchResultsReceivedCb cb) {
+		mResultsAvailableCb = cb;
+	}
+	LinphoneMagicSearchCbsLdapHaveMoreResultsCb getLdapMoreResultsAvailable() const {
+		return mLdapMoreResultsAvailableCb;
+	}
+	void setLdapMoreResultsAvailable(LinphoneMagicSearchCbsLdapHaveMoreResultsCb cb) {
+		mLdapMoreResultsAvailableCb = cb;
+	}
+	LinphoneMagicSearchCbsMoreResultsAvailableCb getMoreResultsAvailable() const {
+		return mMoreResultsAvailableCb;
+	}
+	void setMoreResultsAvailable(LinphoneMagicSearchCbsMoreResultsAvailableCb cb) {
+		mMoreResultsAvailableCb = cb;
+	}
+
+private:
+	LinphoneMagicSearchCbsSearchResultsReceivedCb mResultsAvailableCb = nullptr;
+	LinphoneMagicSearchCbsLdapHaveMoreResultsCb mLdapMoreResultsAvailableCb = nullptr;
+	LinphoneMagicSearchCbsMoreResultsAvailableCb mMoreResultsAvailableCb = nullptr;
 };
 
 LINPHONE_END_NAMESPACE

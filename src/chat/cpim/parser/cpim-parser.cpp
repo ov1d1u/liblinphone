@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010-2022 Belledonne Communications SARL.
+ * Copyright (c) 2010-2024 Belledonne Communications SARL.
  *
  * This file is part of Liblinphone
  * (see https://gitlab.linphone.org/BC/public/liblinphone).
@@ -39,7 +39,7 @@ using namespace std;
 LINPHONE_BEGIN_NAMESPACE
 
 namespace {
-string CpimGrammar("cpim_grammar");
+string CpimGrammar("cpim_grammar.belr");
 }
 
 namespace Cpim {
@@ -643,7 +643,7 @@ shared_ptr<Cpim::Message> Cpim::Parser::parseMessage(const string &input) {
 	size_t parsedSize;
 	shared_ptr<Node> node = d->parser->parseInput("Message", input, &parsedSize);
 	if (!node) {
-		lWarning() << "Unable to parse message.";
+		lWarning() << "Unable to parse CPIM message " << input;
 		return nullptr;
 	}
 

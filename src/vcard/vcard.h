@@ -66,6 +66,7 @@ public:
 	void setPhoto(const std::string &picture);
 	void setUid(const std::string &uid);
 	void setUrl(const std::string &url);
+	void setStarred(bool starred);
 
 	// Getters
 	const std::string &getEtag() const;
@@ -82,6 +83,7 @@ public:
 	std::list<std::string> getImppAddresses() const;
 	const std::string &getUid() const;
 	const std::string &getUrl() const;
+	bool getStarred() const;
 
 	// Other
 	void addExtendedProperty(const std::string &name, const std::string &value);
@@ -89,6 +91,7 @@ public:
 	void addPhoneNumberWithLabel(const std::shared_ptr<const FriendPhoneNumber> &phoneNumber);
 	void addSipAddress(const std::string &sipAddress);
 	const std::string &asVcard4String() const;
+	const std::string &asVcard4StringWithBase64Picture() const;
 	void editMainSipAddress(const std::string &sipAddress);
 	bool generateUniqueId();
 	void removeExtentedPropertiesByName(const std::string &name);
@@ -111,8 +114,8 @@ private:
 	std::string mUrl;
 	std::array<unsigned char, VCARD_MD5_HASH_SIZE> mMd5;
 #endif /* VCARD_ENABLED */
-	mutable std::list<std::shared_ptr<Address>> mSipAddressesCache;
-	mutable bctbx_list_t *mBctbxSipAddressesCache = nullptr;
+	mutable ListHolder<Address> mSipAddresses;
+	mutable std::string vcard4String;
 
 	bool mUseVCard3Grammar = false;
 };

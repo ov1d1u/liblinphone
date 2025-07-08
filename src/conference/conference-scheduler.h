@@ -21,7 +21,7 @@
 #ifndef _L_CONFERENCE_SCHEDULER_H_
 #define _L_CONFERENCE_SCHEDULER_H_
 
-#include <belle-sip/object++.hh>
+#include "belle-sip/object++.hh"
 
 #include "c-wrapper/c-wrapper.h"
 #include "chat/chat-message/chat-message-listener.h"
@@ -62,6 +62,7 @@ public:
 	const std::shared_ptr<ConferenceInfo> getInfo() const;
 	void cancelConference(const std::shared_ptr<ConferenceInfo> &info);
 	void setInfo(const std::shared_ptr<ConferenceInfo> &info);
+	void updateInfo(const std::shared_ptr<ConferenceInfo> &info);
 
 	void setConferenceAddress(const std::shared_ptr<Address> &conferenceAddress);
 
@@ -79,8 +80,7 @@ protected:
 	                                                         bool cancel);
 	void fillCancelList(const ConferenceInfo::participant_list_t &oldList,
 	                    const ConferenceInfo::participant_list_t &newList);
-	virtual void createOrUpdateConference(const std::shared_ptr<ConferenceInfo> &conferenceInfo,
-	                                      const std::shared_ptr<Address> &creator) = 0;
+	virtual void createOrUpdateConference(const std::shared_ptr<ConferenceInfo> &conferenceInfo) = 0;
 	virtual void processResponse(const LinphoneErrorInfo *errorCode,
 	                             const std::shared_ptr<Address> conferenceAddress) = 0;
 

@@ -1039,9 +1039,7 @@ static void proxy_transport_change_with_wrong_port_givin_up(void) {
 	LinphoneProxyConfig *proxy_config;
 	LinphoneAuthInfo *info = linphone_auth_info_new(test_username, NULL, test_password, NULL, auth_domain,
 	                                                NULL); /*create authentication structure from identity*/
-	char route[256];
 	LinphoneTransports *transport = linphone_factory_create_transports(linphone_factory_get());
-	sprintf(route, "sip:%s", test_route);
 	linphone_transports_set_udp_port(transport, LC_SIP_TRANSPORT_RANDOM);
 	linphone_transports_set_tcp_port(transport, LC_SIP_TRANSPORT_RANDOM);
 	linphone_transports_set_tls_port(transport, LC_SIP_TRANSPORT_RANDOM);
@@ -1049,22 +1047,22 @@ static void proxy_transport_change_with_wrong_port_givin_up(void) {
 
 	linphone_core_add_auth_info(lcm->lc, info); /*add authentication info to LinphoneCore*/
 	linphone_auth_info_unref(info);
-	register_with_refresh_base_3(lcm->lc, FALSE, auth_domain, "sip2.linphone.org:5987", 0, transport,
+	register_with_refresh_base_3(lcm->lc, FALSE, auth_domain, "sip2.linphone.org:5987;transport=tcp", 0, transport,
 	                             LinphoneRegistrationProgress);
 	linphone_transports_unref(transport);
 
+	BC_ASSERT(wait_for_until(lcm->lc, lcm->lc, &counters->number_of_LinphoneRegistrationFailed, 1, 33000));
+
 	proxy_config = linphone_core_get_default_proxy_config(lcm->lc);
 	linphone_proxy_config_edit(proxy_config);
-
-	BC_ASSERT_FALSE(wait_for_until(lcm->lc, lcm->lc, &counters->number_of_LinphoneRegistrationCleared, 1, 3000));
 	linphone_proxy_config_enableregister(proxy_config, FALSE);
 	linphone_proxy_config_done(proxy_config);
 
-	BC_ASSERT(wait_for(lcm->lc, lcm->lc, &counters->number_of_LinphoneRegistrationCleared, 1));
-	BC_ASSERT_EQUAL(counters->number_of_LinphoneRegistrationCleared, 1, int, "%d");
+	BC_ASSERT(wait_for_until(lcm->lc, lcm->lc, &counters->number_of_LinphoneRegistrationNone, 1, 33000));
+	BC_ASSERT_EQUAL(counters->number_of_LinphoneRegistrationCleared, 0, int, "%d");
 	BC_ASSERT_EQUAL(counters->number_of_LinphoneRegistrationOk, 0, int, "%d");
 	BC_ASSERT_EQUAL(counters->number_of_LinphoneRegistrationProgress, 1, int, "%d");
-	BC_ASSERT_EQUAL(counters->number_of_LinphoneRegistrationFailed, 0, int, "%d");
+	BC_ASSERT_EQUAL(counters->number_of_LinphoneRegistrationFailed, 1, int, "%d");
 
 	linphone_core_manager_destroy(lcm);
 }
@@ -1731,7 +1729,7 @@ static void _registration_with_ip_version_preference(bool with_ipv6) {
 
 	linphone_core_remove_supported_tag(marie->lc, "gruu");
 	linphone_core_enable_dns_srv(marie->lc, FALSE); /* we want to skip DNS SRV because given current flexisip-tester DNS
-	    configuraition, it gives only an IPv6 host */
+	    configuration, it gives only an IPv6 host */
 
 	linphone_core_manager_start(marie, TRUE);
 	LinphoneAddress *contact = linphone_account_get_contact_address(linphone_core_get_default_account(marie->lc));
@@ -1748,6 +1746,51 @@ static void registration_with_ip_version_preference(void) {
 	} else {
 		ms_warning("Test skipped, ipv6 and ipv4 are not both available");
 	}
+}
+
+/*
+ * This test simulates the creation of a Linphone account and verifies that the LIME user is properly created.
+ * An incorrect password is intentionally introduced to simulate the waiting period while the user awaits the
+ * verification code sent via SMS.
+ */
+static void lime_user_creation_after_registration(void) {
+	LinphoneCoreManager *marie = linphone_core_manager_create("marie_rc");
+	LinphoneAuthInfo *info = (LinphoneAuthInfo *)bctbx_list_get_data(linphone_core_get_auth_info_list(marie->lc));
+	char *password = bctbx_strdup(linphone_auth_info_get_password(info));
+	linphone_auth_info_set_password(info, "wrongpw");
+	BC_ASSERT_PTR_NOT_NULL(info);
+	linphone_auth_info_ref(info);
+	linphone_core_add_auth_info(marie->lc, info);
+	set_lime_server_and_curve(C25519, marie);
+	marie->lime_failure = TRUE;
+	marie->registration_failure = TRUE;
+
+	linphone_core_manager_start(marie, TRUE);
+
+	// Check that LIME user is not created yet
+	BC_ASSERT_TRUE(wait_for(marie->lc, NULL, &marie->stat.number_of_LinphoneRegistrationFailed, 1));
+	BC_ASSERT_TRUE(wait_for(marie->lc, NULL, &marie->stat.number_of_X3dhUserCreationFailure, 1));
+
+	const stats initialMarieStats = marie->stat;
+
+	linphone_core_set_network_reachable(marie->lc, FALSE);
+	LinphoneAuthInfo *new_info =
+	    linphone_auth_info_new(linphone_auth_info_get_username(info), linphone_auth_info_get_userid(info), password,
+	                           NULL, linphone_auth_info_get_realm(info), linphone_auth_info_get_domain(info));
+	linphone_core_add_auth_info(marie->lc, new_info);
+	linphone_core_set_network_reachable(marie->lc, TRUE);
+	marie->lime_failure = FALSE;
+	marie->registration_failure = FALSE;
+
+	BC_ASSERT_TRUE(wait_for(marie->lc, NULL, &marie->stat.number_of_LinphoneRegistrationOk,
+	                        initialMarieStats.number_of_LinphoneRegistrationOk + 1));
+	BC_ASSERT_TRUE(wait_for(marie->lc, NULL, &marie->stat.number_of_X3dhUserCreationSuccess,
+	                        initialMarieStats.number_of_X3dhUserCreationSuccess + 1));
+
+	bctbx_free(password);
+	linphone_auth_info_unref(info);
+	linphone_auth_info_unref(new_info);
+	linphone_core_manager_destroy(marie);
 }
 
 test_t register_tests[] = {
@@ -1813,7 +1856,8 @@ test_t register_tests[] = {
     TEST_NO_TAG("Cleanup of unreliable channels", unreliable_channels_cleanup),
     TEST_NO_TAG("MD5-based digest rejected by policy", md5_digest_rejected),
     TEST_NO_TAG("Registration with custom contact", registration_with_custom_contact),
-    TEST_NO_TAG("Registration with IP version preference", registration_with_ip_version_preference)};
+    TEST_NO_TAG("Registration with IP version preference", registration_with_ip_version_preference),
+    TEST_NO_TAG("Lime user creation after registration", lime_user_creation_after_registration)};
 
 test_suite_t register_test_suite = {"Register",
                                     NULL,

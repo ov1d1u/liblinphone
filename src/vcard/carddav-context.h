@@ -22,6 +22,9 @@
 #define _L_CARDDAV_CONTEXT_H_
 
 #include "c-wrapper/c-wrapper.h"
+#include "core/core-accessor.h"
+#include "core/core.h"
+#include "http/http-client.h"
 
 // =============================================================================
 
@@ -29,12 +32,14 @@ LINPHONE_BEGIN_NAMESPACE
 
 class CardDAVQuery;
 class CardDAVResponse;
+class CardDavMagicSearchPlugin;
+class CardDavPropFilter;
 class Friend;
 class FriendList;
 
-class LINPHONE_PUBLIC CardDAVContext : public UserDataAccessor {
+class LINPHONE_PUBLIC CardDAVContext : public CoreAccessor, public UserDataAccessor {
 public:
-	CardDAVContext(const std::shared_ptr<FriendList> &friendList);
+	CardDAVContext(const std::shared_ptr<Core> &core);
 	CardDAVContext(const CardDAVContext &other) = delete;
 	virtual ~CardDAVContext() = default;
 
@@ -43,32 +48,16 @@ public:
 	friend FriendList;
 
 	// Setters
-	void
-	setContactCreatedCallback(std::function<void(const CardDAVContext *context, const std::shared_ptr<Friend> &f)> cb) {
-		mContactCreatedCb = cb;
-	}
-	void
-	setContactRemovedCallback(std::function<void(const CardDAVContext *context, const std::shared_ptr<Friend> &f)> cb) {
-		mContactRemovedCb = cb;
-	}
-	void setContactUpdatedCallback(std::function<void(const CardDAVContext *context,
-	                                                  const std::shared_ptr<Friend> &newFriend,
-	                                                  const std::shared_ptr<Friend> &oldFriend)> cb) {
-		mContactUpdatedCb = cb;
-	}
-	void setSynchronizationDoneCallback(
-	    std::function<void(const CardDAVContext *context, bool success, const std::string &message)> cb) {
-		mSynchronizationDoneCb = cb;
-	}
-
-	// Other
-	bool isValid() const {
-		return mFriendList != nullptr;
+	void setFriendList(const std::shared_ptr<FriendList> &lf) {
+		mFriendList = lf;
 	}
 
 	void deleteVcard(const std::shared_ptr<Friend> &f);
 	void putVcard(const std::shared_ptr<Friend> &f);
 	void synchronize();
+
+	void setMagicSearchPlugin(const std::shared_ptr<CardDavMagicSearchPlugin> &plugin);
+	void queryVcards(const std::string serverUrl, const std::list<CardDavPropFilter> &propFilters, unsigned int limit);
 
 private:
 	void clientToServerSyncDone(bool success, const std::string &msg);
@@ -78,49 +67,45 @@ private:
 	void addressBookUrlAndCtagRetrieved(const std::list<CardDAVResponse> &list);
 	void addressBookCtagRetrieved(std::string ctag);
 
-	void setSchemeAndHostIfNotDoneYet(CardDAVQuery *query);
-	void processRedirect(CardDAVQuery *query, belle_sip_message_t *message);
-
 	void fetchVcards();
 	void pullVcards(const std::list<CardDAVResponse> &list);
 
-	void queryWellKnown(CardDAVQuery *query);
+	void queryWellKnown(std::shared_ptr<CardDAVQuery> query);
 	void retrieveUserPrincipalUrl();
 	void retrieveUserAddressBooksHomeUrl();
 	void retrieveAddressBookUrlAndCtag();
 	void retrieveAddressBookCtag();
 
-	void sendQuery(CardDAVQuery *query);
+	void sendQuery(const std::shared_ptr<CardDAVQuery> &query, bool cancelCurrentIfAny = false);
+	void setSchemeAndHostIfNotDoneYet(std::shared_ptr<CardDAVQuery> query);
+	void processRedirect(std::shared_ptr<CardDAVQuery> query, const std::string &location);
+	void processQueryResponse(std::shared_ptr<CardDAVQuery> query, const HttpResponse &response);
 	void serverToClientSyncDone(bool success, const std::string &msg);
 	void vcardsFetched(const std::list<CardDAVResponse> &vCards);
+	void magicSearchResultsVcardsPulled(const std::list<CardDAVResponse> &vCards);
 	void vcardsPulled(const std::list<CardDAVResponse> &vCards);
 
-	static std::string generateUrlFromServerAddressAndUid(const std::string &serverUrl);
-	static std::string parseUserPrincipalUrlValueFromXmlResponse(const std::string &body);
-	static std::string parseUserAddressBookUrlValueFromXmlResponse(const std::string &body);
-	static std::list<CardDAVResponse> parseAddressBookUrlAndCtagValueFromXmlResponse(const std::string &body);
-	static std::string parseAddressBookCtagValueFromXmlResponse(const std::string &body);
-	static std::list<CardDAVResponse> parseVcardsEtagsFromXmlResponse(const std::string &body);
-	static std::list<CardDAVResponse> parseVcardsFromXmlResponse(const std::string &body);
-	static void processAuthRequestedFromCarddavRequest(void *data, belle_sip_auth_event_t *event);
-	static void processIoErrorFromCarddavRequest(void *data, const belle_sip_io_error_event_t *event);
-	static void processResponseFromCarddavRequest(void *data, const belle_http_response_event_t *event);
+	std::string generateUrlFromServerAddressAndUid(const std::string &serverUrl);
+	std::string parseUserPrincipalUrlValueFromXmlResponse(const std::string &body);
+	std::string parseUserAddressBookUrlValueFromXmlResponse(const std::string &body);
+	std::list<CardDAVResponse> parseAddressBookUrlAndCtagValueFromXmlResponse(const std::string &body);
+	std::string parseAddressBookCtagValueFromXmlResponse(const std::string &body);
+	std::list<CardDAVResponse> parseVcardsEtagsFromXmlResponse(const std::string &body);
+	std::list<CardDAVResponse> parseVcardsFromXmlResponse(const std::string &body);
 
-	std::shared_ptr<FriendList> mFriendList = nullptr;
+	std::string getUrlSchemeHostAndPort() const;
+
 	std::string mCtag = "";
 	std::string mSyncUri = "";
 	std::string mScheme = "http";
 	std::string mHost = "";
+	int mPort = 0;
 	bool mWellKnownQueried = true;
+	HttpRequest *mHttpRequest = nullptr;
+	std::shared_ptr<CardDAVQuery> mQuery = nullptr;
 
-	std::function<void(const CardDAVContext *context, const std::shared_ptr<Friend> &f)> mContactCreatedCb = nullptr;
-	std::function<void(const CardDAVContext *context, const std::shared_ptr<Friend> &f)> mContactRemovedCb = nullptr;
-	std::function<void(const CardDAVContext *context,
-	                   const std::shared_ptr<Friend> &newFriend,
-	                   const std::shared_ptr<Friend> &oldFriend)>
-	    mContactUpdatedCb = nullptr;
-	std::function<void(const CardDAVContext *context, bool success, const std::string &message)>
-	    mSynchronizationDoneCb = nullptr;
+	std::weak_ptr<FriendList> mFriendList;
+	std::weak_ptr<CardDavMagicSearchPlugin> mCardDavMagicSearchPlugin;
 };
 
 LINPHONE_END_NAMESPACE

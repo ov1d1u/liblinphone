@@ -47,6 +47,7 @@ LINPHONE_BEGIN_NAMESPACE
 #define NEW_LINE 0x2028
 #define CRLF 0x0D0A
 #define LF 0x0A
+#define CR 0x0D
 
 // =============================================================================
 
@@ -107,7 +108,7 @@ void ChatRoom::invalidateAccount() {
 	}
 }
 
-const std::shared_ptr<Account> ChatRoom::getAccount() {
+std::shared_ptr<Account> ChatRoom::getAccount() {
 	const auto conferencePtr = getConference();
 	if (conferencePtr) {
 		return conferencePtr->getAccount();
@@ -115,19 +116,12 @@ const std::shared_ptr<Account> ChatRoom::getAccount() {
 	return nullptr;
 }
 
-const std::string &ChatRoom::getSubject() const {
+const std::string &ChatRoom::getSubjectUtf8() const {
 	const auto conferencePtr = getConference();
 	if (conferencePtr) {
-		return conferencePtr->getSubject();
+		return conferencePtr->getUtf8Subject();
 	}
 	return Utils::getEmptyConstRefObject<std::string>();
-}
-
-void ChatRoom::setSubject(const std::string &subject) {
-	const auto conferencePtr = getConference();
-	if (conferencePtr) {
-		conferencePtr->setSubject(subject);
-	}
 }
 
 void ChatRoom::setUtf8Subject(const std::string &subject) {
@@ -243,15 +237,34 @@ void ChatRoom::setIsEmpty(const bool empty) {
 }
 
 void ChatRoom::realtimeTextReceived(uint32_t character, const shared_ptr<Call> &call) {
+	realtimeTextOrBaudotCharacterReceived(character, call, true);
+}
+
+#ifdef HAVE_BAUDOT
+void ChatRoom::baudotCharacterReceived(char character, const std::shared_ptr<Call> &call) {
+	realtimeTextOrBaudotCharacterReceived((uint32_t)character, call, false);
+}
+#endif /* HAVE_BAUDOT */
+
+void ChatRoom::realtimeTextOrBaudotCharacterReceived(uint32_t character,
+                                                     const std::shared_ptr<Call> &call,
+                                                     bool isRealTimeText) {
 	shared_ptr<Core> core = getCore();
 	LinphoneCore *cCore = core->getCCore();
 
-	if (call && call->getCurrentParams()->realtimeTextEnabled()) {
+	if (call && (!isRealTimeText || call->getCurrentParams()->realtimeTextEnabled())) {
 		mReceivedRttCharacters.push_back(character);
 		remoteIsComposing.push_back(getPeerAddress());
 		linphone_core_notify_is_composing_received(cCore, getCChatRoom());
 
-		if ((character == NEW_LINE) || (character == CRLF) || (character == LF)) {
+		bool isNewLine = false;
+		if (isRealTimeText) {
+			isNewLine = (character == NEW_LINE) || (character == CRLF) || (character == LF);
+		} else {
+			// Baudot
+			isNewLine = (character == CR) || (character == LF);
+		}
+		if (isNewLine) {
 			// End of message
 			string completeText = Utils::unicodeToUtf8(mLastMessageCharacters);
 
@@ -262,12 +275,13 @@ void ChatRoom::realtimeTextReceived(uint32_t character, const shared_ptr<Call> &
 			content->setBodyFromUtf8(completeText);
 			pendingMessage->addContent(content);
 
-			bctbx_debug("New line received, forge a message with content [%s]", content->getBodyAsString().c_str());
+			lDebug() << "New line received, forge a message with content [" << content->getBodyAsString() << "]";
 			pendingMessage->getPrivate()->setParticipantState(getMe()->getAddress(), ChatMessage::State::Delivered,
 			                                                  ::ms_time(nullptr));
 			pendingMessage->getPrivate()->setTime(::ms_time(0));
 
-			if (linphone_config_get_int(linphone_core_get_config(cCore), "misc", "store_rtt_messages", 1) == 1) {
+			const char *parameterName = isRealTimeText ? "store_rtt_messages" : "store_baudot_messages";
+			if (linphone_config_get_int(linphone_core_get_config(cCore), "misc", parameterName, 1) == 1) {
 				pendingMessage->getPrivate()->storeInDb();
 			}
 
@@ -276,7 +290,9 @@ void ChatRoom::realtimeTextReceived(uint32_t character, const shared_ptr<Call> &
 		} else {
 			mLastMessageCharacters.push_back(character);
 			string completeText = Utils::unicodeToUtf8(mLastMessageCharacters);
-			lDebug() << "Received RTT character: [" << character << "], pending text is [" << completeText << "]";
+			string textType = isRealTimeText ? "RTT" : "Baudot";
+			lDebug() << "Received " << textType << " character: [" << character << "], pending text is ["
+			         << completeText << "]";
 		}
 	}
 }
@@ -293,13 +309,123 @@ shared_ptr<ChatMessage> ChatRoom::createChatMessage(ChatMessage::Direction direc
 	return message;
 }
 
-shared_ptr<ImdnMessage> ChatRoom::createImdnMessage(const list<shared_ptr<ChatMessage>> &deliveredMessages,
-                                                    const list<shared_ptr<ChatMessage>> &displayedMessages) {
-	return shared_ptr<ImdnMessage>(new ImdnMessage(getSharedFromThis(), deliveredMessages, displayedMessages));
+Address ChatRoom::getImdnChatRoomPeerAddress(const shared_ptr<ChatMessage> &message) const {
+	const auto messageParticipants = static_cast<int>(message->getParticipantsState().size());
+	const auto imdnParticipantThreshold = getCore()->getImdnToEverybodyThreshold();
+	std::shared_ptr<Address> peerAddress;
+	if (!getCurrentParams()->isGroup() || (messageParticipants <= imdnParticipantThreshold)) {
+		peerAddress = getPeerAddress();
+	} else if (message->getDirection() == ChatMessage::Direction::Incoming) {
+		// An IMDN for an outgoing message would be sent to ourself
+		peerAddress = message->getFromAddress();
+	}
+	return peerAddress ? peerAddress->getUriWithoutGruu() : Address();
 }
 
-shared_ptr<ImdnMessage> ChatRoom::createImdnMessage(const list<Imdn::MessageReason> &nonDeliveredMessages) {
-	return shared_ptr<ImdnMessage>(new ImdnMessage(getSharedFromThis(), nonDeliveredMessages));
+std::shared_ptr<AbstractChatRoom> ChatRoom::getImdnChatRoom(const std::shared_ptr<Address> peerAddress) {
+	auto chatRoomPeerAddress = getPeerAddress();
+	std::shared_ptr<AbstractChatRoom> chatRoom;
+	if (*peerAddress == chatRoomPeerAddress->getUriWithoutGruu()) {
+		chatRoom = getSharedFromThis();
+	} else {
+		shared_ptr<ConferenceParams> params = ConferenceParams::create(getCore());
+		params->setAccount(getCurrentParams()->getAccount());
+		params->setChatDefaults();
+		params->setGroup(false);
+		const auto &backend = getCurrentParams()->getChatParams()->getBackend();
+		params->getChatParams()->setBackend(backend);
+		if (backend == ChatParams::Backend::FlexisipChat) {
+			std::string subject(peerAddress->toString() + "'s IMDNs");
+			params->setUtf8Subject(subject);
+		}
+		ConferenceParams::SecurityLevel securityLevel = ConferenceParams::SecurityLevel::None;
+		auto isEncrypted = getCurrentParams()->getChatParams()->isEncrypted();
+		if (isEncrypted) {
+			// Try to infer chat room type based on requested participants number
+			securityLevel = ConferenceParams::SecurityLevel::EndToEnd;
+		} else {
+			securityLevel = ConferenceParams::SecurityLevel::None;
+		}
+		params->setSecurityLevel(securityLevel);
+		chatRoom = getCore()->getPrivate()->searchChatRoom(params, getLocalAddress(), nullptr, {peerAddress});
+		if (!chatRoom) {
+			chatRoom = getCore()->getPrivate()->createChatRoom(params, peerAddress);
+		}
+	}
+	return chatRoom;
+}
+
+list<shared_ptr<ImdnMessage>> ChatRoom::createImdnMessages(const list<shared_ptr<ChatMessage>> &deliveredMessages,
+                                                           const list<shared_ptr<ChatMessage>> &displayedMessages,
+                                                           bool aggregate) {
+	struct MessagePair {
+		std::list<std::shared_ptr<ChatMessage>> deliveredMessages;
+		std::list<std::shared_ptr<ChatMessage>> displayedMessages;
+	};
+	list<shared_ptr<ImdnMessage>> imdns;
+	if (aggregate) {
+		std::map<Address, MessagePair> messagesByImdnChatRoom;
+		for (const auto &message : deliveredMessages) {
+			auto peerAddress = getImdnChatRoomPeerAddress(message);
+			if (peerAddress.isValid()) {
+				messagesByImdnChatRoom[peerAddress].deliveredMessages.push_back(message);
+			}
+		}
+		for (const auto &message : displayedMessages) {
+			auto peerAddress = getImdnChatRoomPeerAddress(message);
+			if (peerAddress.isValid()) {
+				messagesByImdnChatRoom[peerAddress].displayedMessages.push_back(message);
+			}
+		}
+		for (const auto &[peerAddress, messagePair] : messagesByImdnChatRoom) {
+			imdns.push_back(
+			    shared_ptr<ImdnMessage>(new ImdnMessage(getImdnChatRoom(Address::create(peerAddress)),
+			                                            messagePair.deliveredMessages, messagePair.displayedMessages)));
+		}
+	} else {
+		for (const auto &message : deliveredMessages) {
+			auto peerAddress = getImdnChatRoomPeerAddress(message);
+			if (peerAddress.isValid()) {
+				imdns.push_back(shared_ptr<ImdnMessage>(new ImdnMessage(getImdnChatRoom(Address::create(peerAddress)),
+				                                                        {message}, list<shared_ptr<ChatMessage>>())));
+			}
+		}
+		for (const auto &message : displayedMessages) {
+			auto peerAddress = getImdnChatRoomPeerAddress(message);
+			if (peerAddress.isValid()) {
+				imdns.push_back(shared_ptr<ImdnMessage>(new ImdnMessage(getImdnChatRoom(Address::create(peerAddress)),
+				                                                        list<shared_ptr<ChatMessage>>(), {message})));
+			}
+		}
+	}
+	return imdns;
+}
+
+list<shared_ptr<ImdnMessage>> ChatRoom::createImdnMessages(const list<Imdn::MessageReason> &nonDeliveredMessages,
+                                                           bool aggregate) {
+	list<shared_ptr<ImdnMessage>> imdns;
+	if (aggregate) {
+		std::map<Address, std::list<Imdn::MessageReason>> messagesByImdnChatRoom;
+		for (const auto &messageReason : nonDeliveredMessages) {
+			auto peerAddress = getImdnChatRoomPeerAddress(messageReason.message);
+			if (peerAddress.isValid()) {
+				messagesByImdnChatRoom[peerAddress].push_back(messageReason);
+			}
+		}
+		for (const auto &[peerAddress, messageReasons] : messagesByImdnChatRoom) {
+			imdns.push_back(shared_ptr<ImdnMessage>(
+			    new ImdnMessage(getImdnChatRoom(Address::create(peerAddress)), messageReasons)));
+		}
+	} else {
+		for (const auto &messageReason : nonDeliveredMessages) {
+			auto peerAddress = getImdnChatRoomPeerAddress(messageReason.message);
+			if (peerAddress.isValid()) {
+				imdns.push_back(shared_ptr<ImdnMessage>(
+				    new ImdnMessage(getImdnChatRoom(Address::create(peerAddress)), {messageReason})));
+			}
+		}
+	}
+	return imdns;
 }
 
 shared_ptr<ImdnMessage> ChatRoom::createImdnMessage(const shared_ptr<ImdnMessage> &message) {
@@ -461,6 +587,9 @@ void ChatRoom::notifyUndecryptableChatMessageReceived(const shared_ptr<ChatMessa
 }
 
 // -----------------------------------------------------------------------------
+void ChatRoom::handleMessageRejected(BCTBX_UNUSED(const std::shared_ptr<ChatMessage> &chatMessage)) {
+	lDebug() << __func__ << " not implemented in chatroom [" << this;
+}
 
 std::shared_ptr<ChatMessage> ChatRoom::getMessageFromSal(SalOp *op, const SalMessage *message) {
 	shared_ptr<ChatMessage> msg;
@@ -544,10 +673,9 @@ void ChatRoom::onChatMessageReceived(const shared_ptr<ChatMessage> &chatMessage)
 		// No aggregation, notify right away
 		lDebug() << "[Chat Room] [" << getConferenceId() << "] No aggregation, notify right away";
 
-		bool chatMessagesAggregationEnabled = !!linphone_core_get_chat_messages_aggregation_enabled(cCore);
-		if (chatMessagesAggregationEnabled) { // Need to notify using aggregated callback even if there is only on
-			                                  // message
-			// This can happen when auto download is enabled and auto download takes longer than the aggregation delay
+		// Need to notify using aggregated callback even if there is only on message
+		// This can happen when auto download is enabled and auto download takes longer than the aggregation delay
+		if (core->canAggregateChatMessages()) {
 			aggregatedMessages.push_back(chatMessage);
 			notifyAggregatedChatMessages();
 		} else {
@@ -599,10 +727,12 @@ void ChatRoom::notifyAggregatedChatMessages() {
 	bctbx_list_t *cEvents = L_GET_RESOLVED_C_LIST_FROM_CPP_LIST(eventsList);
 	_linphone_chat_room_notify_chat_messages_received(cChatRoom, cEvents);
 
-	// Notify delivery
+	// Notify delivery - do the same things as when chat messages are not aggregated: send the delivery notification
+	// when the message is in the Delivered state
 	for (auto &chatMessage : aggregatedMessages) {
-		chatMessage->getPrivate()->setParticipantState(getMe()->getAddress(), ChatMessage::State::DeliveredToUser,
+		chatMessage->getPrivate()->setParticipantState(getMe()->getAddress(), ChatMessage::State::Delivered,
 		                                               ::ms_time(nullptr));
+		sendDeliveryNotification(chatMessage);
 	}
 
 	bctbx_list_free_with_data(cMessages, (bctbx_list_free_func)linphone_chat_message_unref);
@@ -747,6 +877,14 @@ void ChatRoom::deleteFromDb() {
 	shared_ptr<AbstractChatRoom> ref = this->getSharedFromThis();
 	Core::deleteChatRoom(ref);
 	setState(ConferenceInterface::State::Deleted);
+
+	// Clear all transient events after deleting the chatroom.
+	// The application might still keep a reference to the chatroom, therefore the destructor may not be called
+	// immediately after the chatroom reference is freed by the core
+	remoteIsComposing.clear();
+	transientEvents.clear();
+	transientMessages.clear();
+	aggregatedMessages.clear();
 }
 
 void ChatRoom::deleteHistory() {
@@ -872,7 +1010,7 @@ bool ChatRoom::isMe(const std::shared_ptr<Address> &address) const {
 	return conference->isMe(address);
 }
 
-const std::shared_ptr<Participant> ChatRoom::getMe() const {
+std::shared_ptr<Participant> ChatRoom::getMe() const {
 	const auto conference = getConference();
 	if (!conference) {
 		return nullptr;
@@ -880,7 +1018,7 @@ const std::shared_ptr<Participant> ChatRoom::getMe() const {
 	return conference->getMe();
 }
 
-const std::shared_ptr<Address> ChatRoom::getConferenceAddress() const {
+std::shared_ptr<Address> ChatRoom::getConferenceAddress() const {
 	const auto conference = getConference();
 	if (!conference) {
 		return nullptr;
@@ -888,7 +1026,7 @@ const std::shared_ptr<Address> ChatRoom::getConferenceAddress() const {
 	return conference->getConferenceAddress();
 }
 
-const std::shared_ptr<Participant> ChatRoom::findParticipant(const std::shared_ptr<Address> &address) const {
+std::shared_ptr<Participant> ChatRoom::findParticipant(const std::shared_ptr<Address> &address) const {
 	const auto conference = getConference();
 	if (!conference) {
 		return nullptr;
@@ -896,7 +1034,7 @@ const std::shared_ptr<Participant> ChatRoom::findParticipant(const std::shared_p
 	return conference->findParticipant(address);
 }
 
-const std::list<std::shared_ptr<Participant>> ChatRoom::getParticipants() const {
+std::list<std::shared_ptr<Participant>> ChatRoom::getParticipants() const {
 	const auto conference = getConference();
 	if (!conference) {
 		return std::list<std::shared_ptr<Participant>>();
@@ -904,10 +1042,26 @@ const std::list<std::shared_ptr<Participant>> ChatRoom::getParticipants() const 
 	return conference->getParticipants();
 }
 
-const std::shared_ptr<ConferenceParams> &ChatRoom::getCurrentParams() const {
+std::list<std::shared_ptr<Address>> ChatRoom::getParticipantAddresses() const {
 	const auto conference = getConference();
 	if (!conference) {
-		return Utils::getEmptyConstRefObject<std::shared_ptr<ConferenceParams>>();
+		return {};
+	}
+	return conference->getParticipantAddresses();
+}
+
+std::optional<std::reference_wrapper<const std::string>> ChatRoom::getIdentifier() const {
+	const auto conference = getConference();
+	if (!conference) {
+		return std::nullopt;
+	}
+	return conference->getIdentifier();
+}
+
+std::shared_ptr<ConferenceParams> ChatRoom::getCurrentParams() const {
+	const auto conference = getConference();
+	if (!conference) {
+		return nullptr;
 	}
 	auto &params = conference->getCurrentParams();
 	shared_ptr<Call> call = getCall();
@@ -947,19 +1101,23 @@ bool ChatRoom::ephemeralSupportedByAllParticipants() const {
 }
 
 uint32_t ChatRoom::getChar() {
-	uint32_t character = 0;
+	try {
+		uint32_t character = 0;
 
-	if (mReadCharacterIndex < mReceivedRttCharacters.size()) {
-		character = mReceivedRttCharacters.at(mReadCharacterIndex);
-		mReadCharacterIndex += 1;
+		if (mReadCharacterIndex < mReceivedRttCharacters.size()) {
+			character = mReceivedRttCharacters.at(mReadCharacterIndex);
+			mReadCharacterIndex += 1;
+		}
+
+		if (mReadCharacterIndex == mReceivedRttCharacters.size()) {
+			mReadCharacterIndex = 0;
+			mReceivedRttCharacters.clear();
+		}
+
+		return character;
+	} catch (std::out_of_range &) {
+		return 0;
 	}
-
-	if (mReadCharacterIndex == mReceivedRttCharacters.size()) {
-		mReadCharacterIndex = 0;
-		mReceivedRttCharacters.clear();
-	}
-
-	return character;
 }
 
 void ChatRoom::setCallId(const std::string &value) {
@@ -983,7 +1141,7 @@ void ChatRoom::setIsMuted(const bool muted, const bool updateDb) {
 	}
 }
 
-const std::shared_ptr<ConferenceInfo> ChatRoom::getConferenceInfo() const {
+std::shared_ptr<ConferenceInfo> ChatRoom::getConferenceInfo() const {
 	const auto conference = getConference();
 	if (!conference) {
 		return nullptr;

@@ -23,6 +23,7 @@
 #include "address/address.h"
 #include "c-wrapper/c-wrapper.h"
 #include "conference/participant-device.h"
+#include "conference/participant.h"
 #include "private.h"
 
 // =============================================================================
@@ -98,6 +99,15 @@ time_t linphone_participant_device_get_time_of_disconnection(const LinphoneParti
 	return ParticipantDevice::toCpp(participant_device)->getTimeOfDisconnection();
 }
 
+const char *linphone_participant_device_get_stream_label(const LinphoneParticipantDevice *participant_device,
+                                                         const LinphoneStreamType stream_type) {
+	return L_STRING_TO_C(ParticipantDevice::toCpp(participant_device)->getStreamLabel(stream_type));
+}
+
+const char *
+linphone_participant_device_get_thumbnail_stream_label(const LinphoneParticipantDevice *participant_device) {
+	return L_STRING_TO_C(ParticipantDevice::toCpp(participant_device)->getThumbnailStreamLabel());
+}
 LinphoneMediaDirection
 linphone_participant_device_get_stream_capability(const LinphoneParticipantDevice *participant_device,
                                                   const LinphoneStreamType stream_type) {
@@ -138,6 +148,15 @@ bool_t linphone_participant_device_get_is_muted(const LinphoneParticipantDevice 
 
 bool_t linphone_participant_device_screen_sharing_enabled(const LinphoneParticipantDevice *participant_device) {
 	return ParticipantDevice::toCpp(participant_device)->screenSharingEnabled();
+}
+
+LinphoneParticipant *linphone_participant_device_get_participant(const LinphoneParticipantDevice *participant_device) {
+	return bellesip::toC(ParticipantDevice::toCpp(participant_device)->getParticipant());
+}
+
+LinphoneCore *linphone_participant_device_get_core(const LinphoneParticipantDevice *participant_device) {
+	const auto &core = ParticipantDevice::toCpp(participant_device)->getCore();
+	return core ? core->getCCore() : nullptr;
 }
 
 void linphone_participant_device_add_callbacks(LinphoneParticipantDevice *participant_device,

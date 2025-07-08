@@ -258,6 +258,10 @@ static void video_call_expected_fps_for_specified_bandwidth(int bandwidth, int e
 		disable_all_video_codecs_except_one(marie->lc, "VP8");
 		disable_all_video_codecs_except_one(pauline->lc, "VP8");
 
+		// Use goog-remb in this test
+		linphone_core_enable_goog_remb(marie->lc, TRUE);
+		linphone_core_enable_goog_remb(pauline->lc, TRUE);
+
 		linphone_core_set_video_device(marie->lc, liblinphone_tester_mire_id);
 		linphone_core_enable_video_capture(marie->lc, TRUE);
 		linphone_core_enable_video_display(marie->lc, TRUE);
@@ -929,7 +933,7 @@ static void video_conference_with_thin_congestion_basic(LinphoneConferenceLayout
 	wait_for_list_interval(lcs, &laure->stat.last_tmmbr_value_received, 20000, 40000, 30000);
 	wait_for_list_interval(lcs, &laure->stat.last_tmmbr_value_received, 40000, 60000, 50000);
 
-	terminate_conference(participants, marie, NULL, NULL);
+	terminate_conference(participants, marie, NULL, NULL, FALSE);
 
 	if (conf) {
 		linphone_conference_unref(conf);

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010-2022 Belledonne Communications SARL.
+ * Copyright (c) 2010-2025 Belledonne Communications SARL.
  *
  * This file is part of Liblinphone
  * (see https://gitlab.linphone.org/BC/public/liblinphone).
@@ -21,12 +21,14 @@
 #ifndef _L_ACCOUNT_PARAMS_H_
 #define _L_ACCOUNT_PARAMS_H_
 
+#include "belle-sip/object++.hh"
+
 #include "address/address.h"
+#include "c-wrapper/list-holder.h"
 #include "linphone/api/c-push-notification-config.h"
 #include "linphone/api/c-types.h"
 #include "linphone/types.h"
 #include "utils/custom-params.h"
-#include <belle-sip/object++.hh>
 
 // =============================================================================
 
@@ -39,7 +41,7 @@ class LINPHONE_PUBLIC AccountParams : public bellesip::HybridObject<LinphoneAcco
 	friend class Account;
 
 public:
-	AccountParams(LinphoneCore *lc);
+	AccountParams(LinphoneCore *lc, bool useDefaultValues);
 	AccountParams(LinphoneCore *lc, int index);
 	AccountParams(const AccountParams &other);
 	virtual ~AccountParams();
@@ -59,6 +61,7 @@ public:
 	void setPushNotificationAllowed(bool allow);
 	void setRemotePushNotificationAllowed(bool allow);
 	void setForceRegisterOnPushNotification(bool allow);
+	void setUnregisterAtStop(bool unregister);
 	void setUseInternationalPrefixForCallsAndChats(bool enable);
 	void setCpimMessagesAllowedInBasicChatRooms(bool allow);
 	void setUserData(void *userData);
@@ -73,20 +76,21 @@ public:
 	void setDependsOn(const std::string &dependsOn);
 	void setIdKey(const std::string &idKey);
 	void setConferenceFactoryUri(const std::string &conferenceFactoryUri);
-	void setConferenceFactoryAddress(const std::shared_ptr<const Address> factoryAddress);
-	void setAudioVideoConferenceFactoryAddress(const std::shared_ptr<const Address> audioVideoConferenceFactoryAddress);
-	void setCcmpServerUrl(const std::string ccmpServerAddress);
-	void setFileTranferServer(const std::string &fileTransferServer);
+	void setConferenceFactoryAddress(const std::shared_ptr<const Address> &factoryAddress);
+	void
+	setAudioVideoConferenceFactoryAddress(const std::shared_ptr<const Address> &audioVideoConferenceFactoryAddress);
+	void setCcmpServerUrl(const std::string &ccmpServerAddress);
+	void setFileTransferServer(const std::string &fileTransferServer);
 	void setPrivacy(LinphonePrivacyMask privacy);
 	void setAvpfMode(LinphoneAVPFMode avpfMode);
 	void setNatPolicy(const std::shared_ptr<NatPolicy> &natPolicy);
 	void setPushNotificationConfig(PushNotificationConfig *pushNotificationConfig);
-	LinphoneStatus setIdentityAddress(const std::shared_ptr<Address> identityAddress);
+	LinphoneStatus setIdentityAddress(const std::shared_ptr<const Address> &identityAddress);
 	LinphoneStatus setRoutes(const std::list<std::shared_ptr<Address>> &routes);
 	LinphoneStatus setRoutesFromStringList(const bctbx_list_t *routes);
 	void enableRtpBundle(bool value);
 	void enableRtpBundleAssumption(bool value);
-	void setCustomContact(const std::shared_ptr<Address> contact);
+	void setCustomContact(const std::shared_ptr<const Address> &contact);
 	void setLimeServerUrl(const std::string &url);
 	/**
 	 * valid algorithms are: c25519, c448 and c25519k512. Empty string is also valid, it will unset the value
@@ -97,6 +101,7 @@ public:
 	void setMwiServerAddress(const std::shared_ptr<Address> &address);
 	void setVoicemailAddress(const std::shared_ptr<Address> &address);
 	void setInstantMessagingEncryptionMandatory(bool mandatory);
+	void setSupportedTagsList(const std::list<std::string> &supportedTagsList);
 
 	// Getters
 	int getExpires() const;
@@ -111,6 +116,7 @@ public:
 	bool getPushNotificationAllowed() const;
 	bool getRemotePushNotificationAllowed() const;
 	bool getForceRegisterOnPushNotification() const;
+	bool getUnregisterAtStop() const;
 	bool getUseInternationalPrefixForCallsAndChats() const;
 	bool isPushNotificationAvailable() const;
 	bool isCpimMessagesAllowedInBasicChatRooms() const;
@@ -125,10 +131,11 @@ public:
 	const std::string &getRefKey() const;
 	const std::string &getDependsOn() const;
 	const std::string &getIdKey() const;
-	const std::shared_ptr<Address> &getConferenceFactoryAddress() const;
-	const std::shared_ptr<Address> &getAudioVideoConferenceFactoryAddress() const;
+	std::shared_ptr<const Address> getConferenceFactoryAddress() const;
+	std::shared_ptr<const Address> getAudioVideoConferenceFactoryAddress() const;
 	const char *getCcmpServerUrlCstr() const;
 	const std::string &getCcmpServerUrl() const;
+	const char *getCcmpUserIdCstr() const;
 	const std::string &getCcmpUserId() const;
 	const std::string &getFileTransferServer() const;
 	const std::string &getIdentity() const;
@@ -139,23 +146,26 @@ public:
 	const std::list<std::string> getRoutesString() const;
 	const bctbx_list_t *getRoutesCString() const;
 	LinphonePrivacyMask getPrivacy() const;
-	const std::shared_ptr<Address> &getIdentityAddress() const;
+	std::shared_ptr<Address> getIdentityAddress() const;
 	LinphoneAVPFMode getAvpfMode() const;
 	std::shared_ptr<NatPolicy> getNatPolicy() const;
 	PushNotificationConfig *getPushNotificationConfig() const;
 	bool rtpBundleEnabled() const;
 	bool rtpBundleAssumptionEnabled() const;
-	const std::shared_ptr<Address> &getCustomContact() const;
+	std::shared_ptr<const Address> getCustomContact() const;
 	const std::string &getLimeServerUrl() const;
 	const std::string &getLimeAlgo() const;
 	const std::string &getPictureUri() const;
-	const std::shared_ptr<Address> &getMwiServerAddress() const;
-	const std::shared_ptr<Address> &getVoicemailAddress() const;
+	std::shared_ptr<const Address> getMwiServerAddress() const;
+	std::shared_ptr<const Address> getVoicemailAddress() const;
 	bool isInstantMessagingEncryptionMandatory() const;
+	const std::list<std::string> &getSupportedTagsList() const;
+	const bctbx_list_t *getSupportedTagsCList() const;
+	bool useSupportedTags() const;
 
 	// Other
-	LinphoneStatus setServerAddress(const std::shared_ptr<Address> serverAddr);
-	const std::shared_ptr<Address> &getServerAddress() const;
+	LinphoneStatus setServerAddress(const std::shared_ptr<const Address> &serverAddr);
+	std::shared_ptr<const Address> getServerAddress() const;
 
 	LinphoneStatus setServerAddressAsString(const std::string &serverAddr);
 	const std::string &getServerAddressAsString() const;
@@ -184,6 +194,7 @@ private:
 	bool mPushNotificationAllowed;
 	bool mRemotePushNotificationAllowed;
 	bool mForceRegisterOnPush;
+	bool mUnregisterAtStop;
 	bool mUseInternationalPrefixForCallsAndChats;
 	bool mRtpBundleEnabled;
 	bool mRtpBundleAssumption;
@@ -196,6 +207,7 @@ private:
 	mutable char *mMwiServerAddressCstr = nullptr;
 	mutable char *mVoicemailAddressCstr = nullptr;
 	mutable char *mCcmpServerUrlCstr = nullptr;
+	mutable char *mCcmpUserIdCstr = nullptr;
 
 	std::string mInternationalPrefix;
 	std::string mInternationalPrefixIsoCountryCode;
@@ -234,6 +246,9 @@ private:
 	std::shared_ptr<Address> mCustomContact = nullptr;
 	std::shared_ptr<Address> mMwiServerAddress = nullptr;
 	std::shared_ptr<Address> mVoicemailAddress = nullptr;
+
+	ListHolder<std::string> mSupportedTagsList = {};
+	bool mUseSupportedTags = false;
 };
 
 LINPHONE_END_NAMESPACE

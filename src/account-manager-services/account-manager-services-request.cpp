@@ -50,41 +50,48 @@ AccountManagerServicesRequest::~AccountManagerServicesRequest() {
 // =============================================================================
 
 void AccountManagerServicesRequest::submit() {
-	auto &httpRequest =
-	    getCore()->getHttpClient().createRequest(mHttpRequestType, mUrl).addHeader("Accept", "application/json");
+	try {
+		auto &httpRequest =
+		    getCore()->getHttpClient().createRequest(mHttpRequestType, mUrl).addHeader("Accept", "application/json");
 
-	if (!mFrom.empty()) {
-		httpRequest.addHeader("From", mFrom);
-	} else if (mTesterEnv) {
-		lWarning() << "[Account Manager Services] Tester env flag set, altering headers!";
-		httpRequest.addHeader("From", "sip:admin_test@sip.example.org");
-		httpRequest.addHeader("x-api-key", "no_secret_at_all");
-	}
-
-	if (!mLanguage.empty()) {
-		httpRequest.addHeader("Accept-Language", mLanguage);
-	}
-
-	if (!mJsonParams.empty()) {
-		Json::StreamWriterBuilder builder;
-		builder["indentation"] = "";
-		auto content = Content(ContentType("application/json"), std::string(Json::writeString(builder, mJsonParams)));
-		httpRequest.setBody(content);
-	}
-
-	auto request = this;
-	httpRequest.execute([request](const HttpResponse &response) {
-		try {
-			int code = response.getStatusCode();
-			if (code >= 200 && code < 300) {
-				request->handleSuccess(response);
-			} else {
-				request->handleError(response);
-			}
-		} catch (const std::exception &e) {
-			lError() << e.what();
+		if (!mFrom.empty()) {
+			httpRequest.addHeader("From", mFrom);
+		} else if (mTesterEnv) {
+			lWarning() << "[Account Manager Services] Tester env flag set, altering headers!";
+			httpRequest.addHeader("From", "sip:admin_test@sip.example.org");
+			httpRequest.addHeader("x-api-key", "no_secret_at_all");
 		}
-	});
+
+		if (!mLanguage.empty()) {
+			httpRequest.addHeader("Accept-Language", mLanguage);
+		}
+
+		if (!mJsonParams.empty()) {
+			Json::StreamWriterBuilder builder;
+			builder["indentation"] = "";
+			auto content =
+			    Content(ContentType("application/json"), std::string(Json::writeString(builder, mJsonParams)));
+			httpRequest.setBody(content);
+		}
+
+		auto request = getSharedFromThis();
+		httpRequest.execute([request](const HttpResponse &response) {
+			try {
+				int code = response.getHttpStatusCode();
+				if (code >= 200 && code < 300) {
+					request->handleSuccess(response);
+				} else {
+					request->handleError(response);
+				}
+			} catch (const std::exception &e) {
+				lError() << e.what();
+			}
+		});
+	} catch (const std::invalid_argument &e) {
+		LINPHONE_HYBRID_OBJECT_INVOKE_CBS(AccountManagerServicesRequest, this,
+		                                  linphone_account_manager_services_request_cbs_get_request_error, 0, e.what(),
+		                                  nullptr);
+	}
 }
 
 // =============================================================================
@@ -123,6 +130,8 @@ string AccountManagerServicesRequest::requestTypeToString(LinphoneAccountManager
 	switch (type) {
 		case LinphoneAccountManagerServicesRequestTypeSendAccountCreationTokenByPush:
 			return "SendAccountCreationTokenByPush";
+		case LinphoneAccountManagerServicesRequestTypeSendAccountRecoveryTokenByPush:
+			return "SendAccountRecoveryTokenByPush";
 		case LinphoneAccountManagerServicesRequestTypeAccountCreationRequestToken:
 			return "RequestAccountCreationRequestToken";
 		case LinphoneAccountManagerServicesRequestTypeAccountCreationTokenFromAccountCreationRequestToken:
@@ -162,7 +171,7 @@ Json::Value AccountManagerServicesRequest::parseResponseAsJson(const HttpRespons
 		           << "] in response ('application/json' was expected), not parsing it";
 		LINPHONE_HYBRID_OBJECT_INVOKE_CBS(AccountManagerServicesRequest, this,
 		                                  linphone_account_manager_services_request_cbs_get_request_error,
-		                                  response.getStatusCode(), "Invalid Content-Type in response", nullptr);
+		                                  response.getHttpStatusCode(), "Invalid Content-Type in response", nullptr);
 		return Json::Value::nullSingleton();
 	}
 
@@ -250,7 +259,7 @@ string AccountManagerServicesRequest::extractDataFromSuccessfulRequest(const Htt
 void AccountManagerServicesRequest::handleSuccess(const HttpResponse &response) {
 	string data = extractDataFromSuccessfulRequest(response);
 	lDebug() << "[Account Manager Services Request] " << requestTypeToString(mType) << " success ("
-	         << response.getStatusCode() << "), data is [" << data << "]";
+	         << response.getHttpStatusCode() << "), data is [" << data << "]";
 
 	if (mType == LinphoneAccountManagerServicesRequestTypeGetDevicesList) {
 		auto json = parseResponseAsJson(response);
@@ -301,14 +310,14 @@ void AccountManagerServicesRequest::handleError(const HttpResponse &response) {
 	}
 
 	lWarning() << "[Account Manager Services Request] " << requestTypeToString(mType) << " error: [" << errorMessage
-	           << "] (" << response.getStatusCode() << ")";
+	           << "] (" << response.getHttpStatusCode() << ")";
 	LinphoneDictionary *dict = nullptr;
 	if (dictionary != nullptr) {
 		dict = dictionary->toC();
 	}
 	LINPHONE_HYBRID_OBJECT_INVOKE_CBS(AccountManagerServicesRequest, this,
 	                                  linphone_account_manager_services_request_cbs_get_request_error,
-	                                  response.getStatusCode(), errorMessage.c_str(), dict);
+	                                  response.getHttpStatusCode(), errorMessage.c_str(), dict);
 }
 
 LINPHONE_END_NAMESPACE

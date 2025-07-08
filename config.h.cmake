@@ -67,4 +67,8 @@
 #cmakedefine HAVE_GOCLEAR
 #cmakedefine HAVE_DLOPEN 1
 #cmakedefine ENABLE_SANITIZER
-#cmakedefine HAVE_STATIC_SOCI
+#cmakedefine HAVE_MANUAL_SOCI_BACKEND_REGISTRATION
+#cmakedefine HAVE_BAUDOT
+#cmakedefine HAVE_STATIC_MSAAUDIO
+#cmakedefine HAVE_STATIC_MSANDROIDCAMERA2
+#cmakedefine HAVE_STATIC_MSWEBRTC

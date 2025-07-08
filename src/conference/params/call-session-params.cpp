@@ -59,6 +59,7 @@ void CallSessionParamsPrivate::clone(const CallSessionParamsPrivate *src) {
 	}
 	if (src->customHeaders) customHeaders = sal_custom_header_clone(src->customHeaders);
 	customContactParameters = src->customContactParameters;
+	customContactUriParameters = src->customContactUriParameters;
 	referer = src->referer;
 	customContents = src->customContents;
 	account = src->account;
@@ -279,10 +280,15 @@ const char *CallSessionParams::getCustomHeader(const string &headerName) const {
 
 // -----------------------------------------------------------------------------
 
-void CallSessionParams::addCustomContactParameter(const std::string &paramName, const std::string &paramValue) {
+void CallSessionParams::removeCustomContactParameter(const std::string &paramName) {
 	L_D();
 	auto it = d->customContactParameters.find(paramName);
 	if (it != d->customContactParameters.end()) d->customContactParameters.erase(it);
+}
+
+void CallSessionParams::addCustomContactParameter(const std::string &paramName, const std::string &paramValue) {
+	L_D();
+	removeCustomContactParameter(paramName);
 	pair<string, string> param(paramName, paramValue);
 	d->customContactParameters.insert(param);
 }
@@ -301,6 +307,33 @@ std::string CallSessionParams::getCustomContactParameter(const std::string &para
 
 // -----------------------------------------------------------------------------
 
+void CallSessionParams::removeCustomContactUriParameter(const std::string &paramName) {
+	L_D();
+	auto it = d->customContactUriParameters.find(paramName);
+	if (it != d->customContactUriParameters.end()) d->customContactUriParameters.erase(it);
+}
+
+void CallSessionParams::addCustomContactUriParameter(const std::string &paramName, const std::string &paramValue) {
+	L_D();
+	removeCustomContactUriParameter(paramName);
+	pair<string, string> param(paramName, paramValue);
+	d->customContactUriParameters.insert(param);
+}
+
+void CallSessionParams::clearCustomContactUriParameters() {
+	L_D();
+	d->customContactUriParameters.clear();
+}
+
+std::string CallSessionParams::getCustomContactUriParameter(const std::string &paramName) const {
+	L_D();
+	auto it = d->customContactUriParameters.find(paramName);
+	if (it == d->customContactUriParameters.end()) return "";
+	return it->second;
+}
+
+// -----------------------------------------------------------------------------
+
 void CallSessionParams::addCustomContent(const std::shared_ptr<Content> &content) {
 	L_D();
 	d->customContents.push_back(content);
@@ -309,6 +342,11 @@ void CallSessionParams::addCustomContent(const std::shared_ptr<Content> &content
 const list<std::shared_ptr<Content>> &CallSessionParams::getCustomContents() const {
 	L_D();
 	return d->customContents;
+}
+
+void CallSessionParams::clearCustomContents() {
+	L_D();
+	d->customContents.clear();
 }
 
 // -----------------------------------------------------------------------------

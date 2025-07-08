@@ -113,6 +113,7 @@ LINPHONE_PUBLIC IceSession *linphone_call_get_ice_session(const LinphoneCall *ca
 LINPHONE_PUBLIC const struct addrinfo *linphone_core_get_stun_server_addrinfo(LinphoneCore *lc);
 LINPHONE_PUBLIC void linphone_core_enable_send_call_stats_periodical_updates(LinphoneCore *lc, bool_t enabled);
 LINPHONE_PUBLIC LinphoneAccount *linphone_core_lookup_known_account(LinphoneCore *lc, const LinphoneAddress *uri);
+LINPHONE_PUBLIC const bctbx_list_t *linphone_core_get_deleted_account_list(const LinphoneCore *lc);
 
 LINPHONE_PUBLIC int linphone_run_stun_tests(LinphoneCore *lc,
                                             int audioPort,
@@ -199,8 +200,6 @@ LINPHONE_PUBLIC bctbx_list_t *linphone_friend_get_insubs(const LinphoneFriend *f
 LINPHONE_PUBLIC int linphone_friend_list_get_expected_notification_version(const LinphoneFriendList *list);
 LINPHONE_PUBLIC long long linphone_friend_list_get_storage_id(const LinphoneFriendList *list);
 LINPHONE_PUBLIC long long linphone_friend_get_storage_id(const LinphoneFriend *lf);
-LINPHONE_PUBLIC LinphoneFriendList *linphone_friend_get_friend_list(const LinphoneFriend *lf);
-LINPHONE_PUBLIC bctbx_list_t **linphone_friend_list_get_friends_attribute(LinphoneFriendList *lfl);
 LINPHONE_PUBLIC const bctbx_list_t *linphone_friend_list_get_dirty_friends_to_update(const LinphoneFriendList *lfl);
 LINPHONE_PUBLIC const char *linphone_friend_list_get_revision(const LinphoneFriendList *lfl);
 
@@ -319,15 +318,18 @@ LINPHONE_PUBLIC void linphone_conference_info_set_uri(LinphoneConferenceInfo *co
                                                       const LinphoneAddress *uri);
 LINPHONE_PUBLIC void linphone_conference_info_set_state(LinphoneConferenceInfo *conference_info,
                                                         LinphoneConferenceInfoState state);
-LINPHONE_PUBLIC void linphone_conference_info_set_ics_uid(LinphoneConferenceInfo *conference_info, const char *uid);
-LINPHONE_PUBLIC const char *linphone_conference_info_get_ics_uid(const LinphoneConferenceInfo *conference_info);
 LINPHONE_PUBLIC int linphone_participant_info_get_sequence_number(const LinphoneParticipantInfo *participant_info);
 LINPHONE_PUBLIC void linphone_conference_info_set_ics_sequence(LinphoneConferenceInfo *conference_info,
                                                                unsigned int sequence);
 LINPHONE_PUBLIC unsigned int linphone_conference_info_get_ics_sequence(const LinphoneConferenceInfo *conference_info);
+LINPHONE_PUBLIC time_t linphone_conference_info_get_earlier_joining_time(const LinphoneConferenceInfo *conference_info);
+LINPHONE_PUBLIC time_t linphone_conference_info_get_expiry_time(const LinphoneConferenceInfo *conference_info);
 LINPHONE_PUBLIC void linphone_participant_info_set_sequence_number(LinphoneParticipantInfo *participant_info,
                                                                    int sequence);
 LINPHONE_PUBLIC bool_t linphone_participant_preserve_session(const LinphoneParticipant *participant);
+
+LINPHONE_PUBLIC time_t linphone_conference_params_get_earlier_joining_time(const LinphoneConferenceParams *params);
+LINPHONE_PUBLIC time_t linphone_conference_params_get_expiry_time(const LinphoneConferenceParams *params);
 
 LINPHONE_PUBLIC char *sal_get_random_token_lowercase(int size);
 
@@ -403,6 +405,7 @@ LINPHONE_PUBLIC void linphone_event_set_state(LinphoneEvent *lev, LinphoneSubscr
 
 LINPHONE_PUBLIC void linphone_participant_device_set_state(LinphoneParticipantDevice *participant_device,
                                                            LinphoneParticipantDeviceState state);
+LINPHONE_PUBLIC LinphoneCore *linphone_participant_device_get_core(const LinphoneParticipantDevice *participant_device);
 
 #endif // !defined(__cplusplus)
 
@@ -419,6 +422,8 @@ LINPHONE_PUBLIC void linphone_call_restart_main_audio_stream(LinphoneCall *call)
 
 LINPHONE_PUBLIC int linphone_core_get_number_of_duplicated_messages(const LinphoneCore *core);
 
+LINPHONE_PUBLIC void linphone_core_set_account_deletion_timeout(LinphoneCore *core, unsigned int seconds);
+
 LINPHONE_PUBLIC void linphone_core_set_push_notification_config(LinphoneCore *core,
                                                                 LinphonePushNotificationConfig *config);
 
@@ -431,6 +436,27 @@ linphone_account_manager_services_create_get_account_info_as_admin_request(Linph
 LINPHONE_PUBLIC LinphoneAccountManagerServicesRequest *
 linphone_account_manager_services_create_delete_account_as_admin_request(LinphoneAccountManagerServices *ams,
                                                                          int account_id);
+
+LINPHONE_PUBLIC void linphone_core_enable_goog_remb(LinphoneCore *core, bool_t enable);
+
+/**
+ * Do not prune gr parameter in conference address
+ * @param core #LinphoneCore object @notnil
+ * @param enabled TRUE if enabled, FALSE otherwise.
+ **/
+LINPHONE_PUBLIC void linphone_core_enable_gruu_in_conference_address(LinphoneCore *core, bool_t enabled);
+
+/**
+ * Return whether the gr parameter is kept in the conference address
+ * Returns enablement of text sending via Baudot tones in the audio stream.
+ * @ingroup media_parameters
+ * @param core #LinphoneCore object @notnil
+ * @return TRUE if the "gr" parameter is kept in the conference address, FALSE otherwise.
+ **/
+LINPHONE_PUBLIC bool_t linphone_core_gruu_in_conference_address_enabled(const LinphoneCore *core);
+
+LINPHONE_PUBLIC LinphoneChatRoom *
+linphone_core_create_basic_chat_room(LinphoneCore *core, const char *localSipUri, const char *remoteSipUri);
 
 #ifdef __cplusplus
 }

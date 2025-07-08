@@ -84,6 +84,7 @@ public:
 	void enableMessageWaitingIndicationSubscription(bool enable);
 
 	int addCall(const std::shared_ptr<Call> &call);
+	void addReleasingCall(const std::shared_ptr<Call> &call);
 	bool canWeAddCall() const;
 	bool hasCalls() const {
 		return !calls.empty();
@@ -93,6 +94,7 @@ public:
 	void iterateCalls(time_t currentRealTime, bool oneSecondElapsed) const;
 	void notifySoundcardUsage(bool used);
 	int removeCall(const std::shared_ptr<Call> &call);
+	void removeReleasingCall(const std::shared_ptr<Call> &call);
 	void setCurrentCall(const std::shared_ptr<Call> &call);
 	void setVideoWindowId(bool preview, void *id);
 	void setImagePreprocessor(void *arg);
@@ -112,13 +114,13 @@ public:
 
 	ToneManager &getToneManager();
 
-	void reloadLdapList();
+	void reloadRemoteContactDirectories();
 
 	// Base
-	std::shared_ptr<AbstractChatRoom> createServerChatRoom(const std::shared_ptr<Address> &conferenceFactoryUri,
+	std::shared_ptr<AbstractChatRoom> createServerChatRoom(const std::shared_ptr<const Address> &conferenceFactoryUri,
 	                                                       SalCallOp *op,
 	                                                       const std::shared_ptr<ConferenceParams> &params);
-	std::shared_ptr<AbstractChatRoom> createClientChatRoom(const std::shared_ptr<Address> &conferenceFactoryUri,
+	std::shared_ptr<AbstractChatRoom> createClientChatRoom(const std::shared_ptr<const Address> &conferenceFactoryUri,
 	                                                       const ConferenceId &conferenceId,
 	                                                       SalCallOp *op,
 	                                                       const std::shared_ptr<ConferenceParams> &params);
@@ -131,17 +133,14 @@ public:
 	std::shared_ptr<AbstractChatRoom> createClientChatRoom(const std::string &subject, bool fallback, bool encrypted);
 
 	std::shared_ptr<AbstractChatRoom> createChatRoom(const std::shared_ptr<ConferenceParams> &params,
-	                                                 const std::shared_ptr<const Address> &localAddr,
-	                                                 const std::list<std::shared_ptr<const Address>> &participants);
-	std::shared_ptr<AbstractChatRoom> createChatRoom(const std::shared_ptr<ConferenceParams> &params,
-	                                                 const std::list<std::shared_ptr<const Address>> &participants);
+	                                                 const std::list<std::shared_ptr<Address>> &participants);
 	std::shared_ptr<AbstractChatRoom> createChatRoom(const std::string &subject,
-	                                                 const std::list<std::shared_ptr<const Address>> &participants);
+	                                                 const std::list<std::shared_ptr<Address>> &participants);
 	std::shared_ptr<AbstractChatRoom> createChatRoom(const std::shared_ptr<ConferenceParams> &params,
-	                                                 const std::shared_ptr<Address> &localAddr,
-	                                                 const std::shared_ptr<const Address> &participant);
-	std::shared_ptr<AbstractChatRoom> createChatRoom(const std::shared_ptr<const Address> &participant);
+	                                                 const std::shared_ptr<Address> &participant);
+	std::shared_ptr<AbstractChatRoom> createChatRoom(const std::shared_ptr<Address> &participant);
 
+	std::shared_ptr<AbstractChatRoom> searchChatRoom(const std::string identifier) const;
 	std::shared_ptr<AbstractChatRoom> searchChatRoom(const std::shared_ptr<ConferenceParams> &params,
 	                                                 const std::shared_ptr<const Address> &localAddr,
 	                                                 const std::shared_ptr<const Address> &remoteAddr,
@@ -159,6 +158,7 @@ public:
 	std::shared_ptr<AbstractChatRoom> findExumedChatRoomFromPreviousConferenceId(const ConferenceId conferenceId) const;
 
 	void stopChatMessagesAggregationTimer();
+	void deleteConferenceInfo(const std::shared_ptr<Address> &conferenceAddress);
 	void createConferenceCleanupTimer();
 	void stopConferenceCleanupTimer();
 
@@ -199,13 +199,17 @@ private:
 
 	std::list<CoreListener *> listeners;
 
+	// This list holds the last reference to a Call object after it reaches the End state. In fact a call is a listener
+	// of the CallSession object which doesn't hold a strong reference to it
+	std::list<std::shared_ptr<Call>> mReleasingCalls;
+
 	std::list<std::shared_ptr<Call>> calls;
 	std::shared_ptr<Call> currentCall;
 
 	std::unordered_map<ConferenceId, std::shared_ptr<AbstractChatRoom>, ConferenceId::WeakHash, ConferenceId::WeakEqual>
-	    chatRoomsById;
+	    mChatRoomsById;
 	std::unordered_map<ConferenceId, std::shared_ptr<Conference>, ConferenceId::WeakHash, ConferenceId::WeakEqual>
-	    conferenceById;
+	    mConferenceById;
 
 	std::unique_ptr<EncryptionEngine> imee;
 
@@ -230,7 +234,9 @@ private:
 	ExtraBackgroundTask bgTask{"Stop core async end"};
 	BackgroundTask coreStartupTask{"Core startup until registration"};
 
-	std::list<std::shared_ptr<Ldap>> mLdapServers; // Persistent list of LDAP servers
+	std::list<std::shared_ptr<RemoteContactDirectory>>
+	    mRemoteContactDirectories; // Persistent list of LDAP & CardDAV configs
+
 	std::string logLabel;
 	LinphoneCodecPriorityPolicy videoCodecPriorityPolicy = LinphoneCodecPriorityPolicyAuto;
 	std::unique_ptr<HttpClient> httpClient;

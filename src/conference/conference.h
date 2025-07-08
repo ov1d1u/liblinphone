@@ -70,21 +70,24 @@ class LINPHONE_PUBLIC Conference : public bellesip::HybridObject<LinphoneConfere
 public:
 	static constexpr int sLabelLength = 10;
 	static const std::string SecurityModeParameter;
+	static const std::string ConfIdParameter;
+	static const std::string AdminParameter;
+	static const std::string IsFocusParameter;
+	static const std::string TextParameter;
 	static bool isTerminationState(ConferenceInterface::State state);
-	static const Address
-	createParticipantAddressForResourceList(const ConferenceInfo::participant_list_t::value_type &p);
+	static Address createParticipantAddressForResourceList(const ConferenceInfo::participant_list_t::value_type &p);
+	static Address createParticipantAddressForResourceList(const std::shared_ptr<Participant> &p);
+
 	virtual ~Conference();
 
-	virtual int inviteAddresses(const std::list<std::shared_ptr<const Address>> &addresses,
+	virtual int inviteAddresses(const std::list<std::shared_ptr<Address>> &addresses,
 	                            const LinphoneCallParams *params) = 0;
-	virtual bool dialOutAddresses(const std::list<std::shared_ptr<const Address>> &addressList) = 0;
+	virtual bool dialOutAddresses(const std::list<std::shared_ptr<Address>> &addressList) = 0;
 	virtual bool finalizeParticipantAddition(std::shared_ptr<Call> call) = 0;
 
 	std::shared_ptr<Participant> getActiveParticipant() const;
 
-	std::shared_ptr<ParticipantInfo>
-	findInvitedParticipant(const std::shared_ptr<const Address> &participantAddress) const;
-	void setInvitedParticipants(const ConferenceInfo::participant_list_t &invitedParticipants);
+	void setInvitedParticipants(const std::list<std::shared_ptr<Participant>> &invitedParticipants);
 
 	std::shared_ptr<ParticipantDevice> findParticipantDevice(const std::shared_ptr<const CallSession> &session) const;
 	std::shared_ptr<ParticipantDevice> findParticipantDevice(const std::shared_ptr<const Address> &pAddr,
@@ -106,19 +109,25 @@ public:
 
 	bool setParticipants(const std::list<std::shared_ptr<Participant>> &&newParticipants);
 
+	void addInvitedParticipant(const std::shared_ptr<Call> &call);
+	void addInvitedParticipant(const std::shared_ptr<Address> &address);
+	void addInvitedParticipant(const std::shared_ptr<Participant> &participant);
 	bool addParticipant(std::shared_ptr<Call> call) override;
 	bool addParticipant(const std::shared_ptr<ParticipantInfo> &info) override;
-	bool addParticipant(const std::shared_ptr<const Address> &participantAddress) override;
-	bool addParticipants(const std::list<std::shared_ptr<const Address>> &addresses) override;
+	bool addParticipant(const std::shared_ptr<Address> &participantAddress) override;
+	bool addParticipants(const std::list<std::shared_ptr<Address>> &addresses) override;
 	virtual bool addParticipantDevice(std::shared_ptr<Call> call);
+	virtual void addParticipantDevice(const std::shared_ptr<Participant> &participant,
+	                                  const std::shared_ptr<ParticipantDeviceIdentity> &deviceInfo);
 
 	int getParticipantCount() const override;
 	const std::list<std::shared_ptr<Participant>> &getParticipants() const override;
-	const std::list<std::shared_ptr<ParticipantDevice>> getParticipantDevices(bool includeMe = true) const override;
-	const std::shared_ptr<Participant> getScreenSharingParticipant() const;
-	const std::shared_ptr<ParticipantDevice> getScreenSharingDevice() const;
+	std::list<std::shared_ptr<Address>> getParticipantAddresses() const;
+	std::list<std::shared_ptr<ParticipantDevice>> getParticipantDevices(bool includeMe = true) const override;
+	std::shared_ptr<Participant> getScreenSharingParticipant() const;
+	std::shared_ptr<ParticipantDevice> getScreenSharingDevice() const;
 
-	const std::string &getSubject() const override;
+	const std::string &getSubject() const;
 	const std::string &getUtf8Subject() const override;
 
 	void join(const std::shared_ptr<Address> &participantAddress) override;
@@ -142,8 +151,6 @@ public:
 	virtual void createEventHandler(ConferenceListener *confListener = nullptr, bool addToListEventHandler = false) = 0;
 	virtual bool isIn() const = 0;
 
-	virtual void onConferenceTerminated(const std::shared_ptr<Address> &addr) override;
-
 	// TODO: Delete - Temporary function
 	void setParams(std::shared_ptr<ConferenceParams> newParameters) {
 		mConfParams = newParameters;
@@ -154,11 +161,11 @@ public:
 		return mConfParams;
 	}
 
-	virtual const std::shared_ptr<Address> &getConferenceAddress() const override;
+	virtual std::shared_ptr<Address> getConferenceAddress() const override;
 	void setConferenceAddress(const std::shared_ptr<Address> &conferenceAddress);
 
 	void setParticipantAdminStatus(const std::shared_ptr<Participant> &participant, bool isAdmin) override;
-	void setSubject(const std::string &subject) override;
+	void setSubject(const std::string &subject);
 	void setUtf8Subject(const std::string &subject) override;
 
 	const std::string &getUsername() const;
@@ -167,7 +174,7 @@ public:
 	ConferenceLayout getLayout() const;
 	void setLayout(const ConferenceLayout layout);
 
-	const std::shared_ptr<Account> getAccount();
+	std::shared_ptr<Account> getAccount();
 	void invalidateAccount();
 	time_t getStartTime() const;
 	int getDuration() const;
@@ -176,6 +183,7 @@ public:
 	void addListener(std::shared_ptr<ConferenceListenerInterface> listener) override;
 
 	const ConferenceId &getConferenceId() const override;
+	std::optional<std::reference_wrapper<const std::string>> getIdentifier() const;
 	inline unsigned int getLastNotify() const {
 		return mLastNotify;
 	};
@@ -206,6 +214,8 @@ public:
 	notifyEphemeralMessageEnabled(time_t creationTime, const bool isFullState, const bool enable);
 	virtual std::shared_ptr<ConferenceEphemeralMessageEvent>
 	notifyEphemeralLifetimeChanged(time_t creationTime, const bool isFullState, const long lifetime);
+	virtual std::shared_ptr<ConferenceNotifiedEvent> notifyAllowedParticipantListChanged(time_t creationTime,
+	                                                                                     const bool isFullState);
 	virtual std::shared_ptr<ConferenceParticipantDeviceEvent>
 	notifyParticipantDeviceAdded(time_t creationTime,
 	                             const bool isFullState,
@@ -236,6 +246,11 @@ public:
 	                                            const bool isFullState,
 	                                            const std::shared_ptr<Participant> &participant,
 	                                            const std::shared_ptr<ParticipantDevice> &participantDevice);
+	virtual std::shared_ptr<ConferenceParticipantDeviceEvent>
+	notifyParticipantDeviceJoiningRequest(time_t creationTime,
+	                                      const bool isFullState,
+	                                      const std::shared_ptr<Participant> &participant,
+	                                      const std::shared_ptr<ParticipantDevice> &participantDevice);
 
 	void notifySpeakingDevice(uint32_t ssrc, bool isSpeaking);
 	void notifyMutedDevice(uint32_t ssrc, bool muted);
@@ -303,10 +318,12 @@ public:
 	virtual int enter() = 0;
 
 	virtual const std::shared_ptr<Address> getOrganizer() const = 0;
-	virtual void setOrganizer(const std::shared_ptr<Address> &organizer);
+	virtual void setOrganizer(const std::shared_ptr<Address> &organizer) const;
 
 	bool isConferenceEnded() const;
+	bool isConferenceExpired() const;
 	bool isConferenceStarted() const;
+	bool isConferenceAvailable() const;
 
 	virtual AudioControlInterface *getAudioControlInterface() const = 0;
 	virtual VideoControlInterface *getVideoControlInterface() const = 0;
@@ -331,12 +348,20 @@ public:
 
 	virtual const std::shared_ptr<ConferenceInfo> createOrGetConferenceInfo() const;
 
+	bool isChatOnly() const;
 	bool supportsMedia() const;
+
+	virtual void handleRefer(SalReferOp *op,
+	                         const std::shared_ptr<LinphonePrivate::Address> &referAddr,
+	                         const std::string method) = 0;
+
+	void resetLastNotify();
+
+	void setConferenceId(const ConferenceId &conferenceId);
 
 protected:
 	explicit Conference(const std::shared_ptr<Core> &core,
-	                    const std::shared_ptr<Address> &myAddress,
-	                    CallSessionListener *callSessionListener,
+	                    std::shared_ptr<CallSessionListener> callSessionListener,
 	                    const std::shared_ptr<const ConferenceParams> params);
 
 	std::list<std::shared_ptr<Participant>> mParticipants;
@@ -347,7 +372,7 @@ protected:
 
 	std::list<std::shared_ptr<ConferenceListenerInterface>> mConfListeners;
 
-	CallSessionListener *mCallSessionListener = nullptr;
+	std::weak_ptr<CallSessionListener> mCallSessionListener;
 
 	std::map<ConferenceMediaCapabilities, bool> getMediaCapabilities() const;
 
@@ -355,16 +380,17 @@ protected:
 
 	ConferenceId mConferenceId;
 
-	ConferenceInfo::participant_list_t mInvitedParticipants;
+	std::list<std::shared_ptr<Participant>> mInvitedParticipants;
 
 	std::shared_ptr<ConferenceParams> mConfParams = nullptr;
+
+	mutable std::shared_ptr<Address> mOrganizer;
 
 	// lastNotify belongs to the conference and not the the event handler.
 	// The event handler can access it using the getter
 	unsigned int mLastNotify = 0;
 
 	std::string mUsername = "";
-	std::shared_ptr<Address> mOrganizer;
 
 	long long mConferenceInfoId = -1;
 
@@ -372,9 +398,12 @@ protected:
 	std::map<uint32_t, bool> mPendingParticipantsMutes;
 
 	virtual std::shared_ptr<ConferenceInfo> createConferenceInfo() const;
+	virtual std::shared_ptr<ConferenceInfo> createConferenceInfoWithCustomParticipantList(
+	    const std::shared_ptr<Address> &organizer,
+	    const std::list<std::shared_ptr<Participant>> &invitedParticipants) const;
 	virtual std::shared_ptr<ConferenceInfo>
 	createConferenceInfoWithCustomParticipantList(const std::shared_ptr<Address> &organizer,
-	                                              const ConferenceInfo::participant_list_t invitedParticipants) const;
+	                                              const ConferenceInfo::participant_list_t &invitedParticipants) const;
 	const std::shared_ptr<ConferenceInfo> getUpdatedConferenceInfo() const;
 	const std::shared_ptr<ParticipantDevice> getFocusOwnerDevice() const;
 
@@ -382,15 +411,31 @@ protected:
 	bool updateMinatureRequestedFlag() const;
 
 	mutable bool thumbnailsRequested = true;
+
+	void fillInvitedParticipantList(const ConferenceInfo::participant_list_t infos);
 	void fillInvitedParticipantList(SalCallOp *op, const std::shared_ptr<Address> &organizer, bool cancelling);
+	std::shared_ptr<Participant> findInvitedParticipant(const std::shared_ptr<const Address> &participantAddress) const;
+	std::shared_ptr<ParticipantDevice>
+	findInvitedParticipantDevice(const std::shared_ptr<const CallSession> &session) const;
 	std::list<std::shared_ptr<const Address>> getInvitedAddresses() const;
-	ConferenceInfo::participant_list_t getFullParticipantList() const;
-	void fillParticipantAttributes(std::shared_ptr<Participant> &p);
+	std::list<std::shared_ptr<Participant>> getInvitedParticipants() const;
+	void removeInvitedParticipant(const std::shared_ptr<Address> &address);
+
+	std::shared_ptr<Participant> createParticipant(std::shared_ptr<Call> call);
+	std::shared_ptr<Participant> createParticipant(std::shared_ptr<const Address> participantAddress);
+	virtual std::shared_ptr<ParticipantDevice> createParticipantDevice(std::shared_ptr<Participant> participant,
+	                                                                   std::shared_ptr<Call> call);
+
+	std::list<std::shared_ptr<Participant>> getFullParticipantList() const;
+	void fillParticipantAttributes(std::shared_ptr<Participant> &p) const;
+
+	void notifyNewDevice(const std::shared_ptr<ParticipantDevice> &device);
+
 	virtual void configure(SalCallOp *op) = 0;
+	void inititializeMe();
+
 	void incrementLastNotify();
 	void setLastNotify(unsigned int lastNotify);
-	void resetLastNotify();
-	void setConferenceId(const ConferenceId &conferenceId);
 
 	void setChatRoom(const std::shared_ptr<AbstractChatRoom> &chatRoom);
 
@@ -402,6 +447,13 @@ private:
 
 	L_DISABLE_COPY(Conference);
 };
+
+inline std::ostream &operator<<(std::ostream &str, const Conference &conference) {
+	const auto &conferenceAddress = conference.getConferenceAddress();
+	str << "Conference [" << &conference << "] ("
+	    << (conferenceAddress ? conferenceAddress->toString() : std::string("sip:")) << ")";
+	return str;
+}
 
 class ConferenceLogContextualizer : public CoreLogContextualizer {
 public:

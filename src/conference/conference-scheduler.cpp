@@ -96,7 +96,7 @@ void ConferenceScheduler::cancelConference(const std::shared_ptr<ConferenceInfo>
 	if (info) {
 		const auto &conferenceAddress = info->getUri();
 		const std::string conferenceAddressStr =
-		    (conferenceAddress ? conferenceAddress->toString() : std::string("sip:unknown"));
+		    (conferenceAddress ? conferenceAddress->toString() : std::string("sip:"));
 		lInfo() << "[Conference Scheduler] [" << this << "] is attempting to cancel a conference with address "
 		        << conferenceAddressStr;
 		auto clone = info->clone()->toSharedPtr();
@@ -123,8 +123,8 @@ void ConferenceScheduler::setInfo(const std::shared_ptr<ConferenceInfo> &info) {
 		mAccount = getCore()->getDefaultAccount();
 	}
 
-	const auto creator = getAccount() ? getAccount()->getAccountParams()->getIdentityAddress()
-	                                  : Address::create(linphone_core_get_identity(getCore()->getCCore()));
+	auto creator = getAccount() ? getAccount()->getAccountParams()->getIdentityAddress()->clone()->toSharedPtr()
+	                            : Address::create(linphone_core_get_identity(getCore()->getCCore()));
 	if (!creator || !creator->isValid()) {
 		lWarning() << "[Conference Scheduler] [" << this
 		           << "] Unable to determine the address of the user attempting to set the conference information!";
@@ -133,8 +133,7 @@ void ConferenceScheduler::setInfo(const std::shared_ptr<ConferenceInfo> &info) {
 
 	const auto &organizer = clone->getOrganizerAddress();
 	const auto &conferenceAddress = clone->getUri();
-	const std::string conferenceAddressStr =
-	    (conferenceAddress ? conferenceAddress->toString() : std::string("sip:unknown"));
+	const std::string conferenceAddressStr = (conferenceAddress ? conferenceAddress->toString() : std::string("sip:"));
 	const auto &participants = clone->getParticipants();
 	const auto participantListEmpty = participants.empty();
 	const bool participantFound = (std::find_if(participants.cbegin(), participants.cend(), [&creator](const auto &p) {
@@ -179,7 +178,7 @@ void ConferenceScheduler::setInfo(const std::shared_ptr<ConferenceInfo> &info) {
 	lInfo() << "[Conference Scheduler] [" << this << "] is attempting to " << (isUpdate ? "update" : "schedule")
 	        << " a conference with address " << conferenceAddressStr;
 
-	if (mConferenceInfo == nullptr && !isUpdate) {
+	if (!isUpdate) {
 		setState(State::AllocationPending);
 		if (conferenceAddress && conferenceAddress->isValid()) {
 			// This is a hack for the tester
@@ -203,11 +202,52 @@ void ConferenceScheduler::setInfo(const std::shared_ptr<ConferenceInfo> &info) {
 			infoState = ConferenceInfo::State::Updated;
 		}
 	}
+
+	if (linphone_core_conference_server_enabled(getCore()->getCCore())) {
+		const auto &startTime = clone->getDateTime();
+		time_t earlierJoiningTime = ms_time(NULL);
+		if (startTime >= 0) {
+			long availability = getCore()->getConferenceAvailabilityBeforeStart();
+			earlierJoiningTime = startTime;
+			if (availability >= 0) {
+				earlierJoiningTime += availability;
+			}
+		}
+		clone->setEarlierJoiningTime(earlierJoiningTime);
+
+		const auto duration = clone->getDuration();
+		time_t endTime = -1;
+		if ((startTime >= 0) && (duration > 0)) {
+			// The duration of the conference is stored in minutes in the conference information
+			endTime = startTime + duration * 60;
+		}
+
+		time_t expiryTime = -1;
+		long expiry = getCore()->getConferenceExpirePeriod();
+		if (endTime >= 0) {
+			// Conference has a defined end time
+			expiryTime = endTime;
+		} else if (startTime >= 0) {
+			// Conference can run indefinitely
+			expiryTime = -1;
+		} else {
+			// Dial out conference
+			expiryTime = ms_time(NULL);
+		}
+		if (expiry > 0) {
+			expiryTime += expiry;
+		}
+		clone->setExpiryTime(expiryTime);
+	}
 	clone->setState(infoState);
 
 	mConferenceInfo = clone;
 
-	createOrUpdateConference(mConferenceInfo, creator);
+	createOrUpdateConference(mConferenceInfo);
+}
+
+void ConferenceScheduler::updateInfo(const std::shared_ptr<ConferenceInfo> &info) {
+	mConferenceInfo = info->clone()->toSharedPtr();
 }
 
 void ConferenceScheduler::onChatMessageStateChanged(const shared_ptr<ChatMessage> &message, ChatMessage::State state) {
@@ -280,24 +320,27 @@ void ConferenceScheduler::setConferenceAddress(const std::shared_ptr<Address> &c
 
 	if (getState() == State::AllocationPending) {
 		lInfo() << "[Conference Scheduler] [" << this
-		        << "] Conference has been succesfully created: " << *conferenceAddress;
+		        << "] Conference has been successfully created: " << *conferenceAddress;
 		mConferenceInfo->setUri(conferenceAddress);
 	} else {
+		const auto &uri = mConferenceInfo->getUri();
 		// No need to update the conference address during an update
 		lInfo() << "[Conference Scheduler] [" << this
-		        << "] Conference has been succesfully updated: " << *mConferenceInfo->getUri();
+		        << "] Conference has been successfully updated: " << (uri ? uri->toString() : std::string("sip:"));
 	}
 
+	bool error = false;
 #ifdef HAVE_DB_STORAGE
 	auto &mainDb = getCore()->getPrivate()->mainDb;
 	if (mainDb) {
 		lInfo() << "[Conference Scheduler] [" << this << "] Conference address " << *conferenceAddress
-		        << " is known, inserting conference info in database";
-		mainDb->insertConferenceInfo(mConferenceInfo);
+		        << " is known, inserting conference info [" << mConferenceInfo << "] in database";
+		error = (mainDb->insertConferenceInfo(mConferenceInfo) < 0);
 	}
 #endif
 
-	setState(State::Ready);
+	auto newState = error ? State::Error : State::Ready;
+	setState(newState);
 }
 
 shared_ptr<ChatMessage> ConferenceScheduler::createInvitationChatMessage(shared_ptr<AbstractChatRoom> chatRoom,
@@ -468,7 +511,7 @@ void ConferenceScheduler::sendInvitations(shared_ptr<ConferenceParams> conferenc
 
 	// Sending the ICS once for each participant in a separated chat room each time.
 	for (auto participant : mInvitationsToSend) {
-		list<std::shared_ptr<const Address>> chatRoomParticipantList;
+		list<std::shared_ptr<Address>> chatRoomParticipantList;
 		chatRoomParticipantList.push_back(participant);
 		list<std::shared_ptr<Address>> participantList;
 		std::shared_ptr<Address> remoteAddress = nullptr;
@@ -483,7 +526,7 @@ void ConferenceScheduler::sendInvitations(shared_ptr<ConferenceParams> conferenc
 		if (!chatRoom) {
 			lInfo() << "[Conference Scheduler] [" << this << "] Existing chat room between [" << *sender << "] and ["
 			        << *participant << "] wasn't found, creating it.";
-			chatRoom = getCore()->getPrivate()->createChatRoom(conferenceParams, sender, chatRoomParticipantList);
+			chatRoom = getCore()->getPrivate()->createChatRoom(conferenceParams, chatRoomParticipantList);
 		} else {
 			lInfo() << "[Conference Scheduler] [" << this << "] Found existing chat room ["
 			        << *chatRoom->getPeerAddress() << "] between [" << *sender << "] and [" << *participant

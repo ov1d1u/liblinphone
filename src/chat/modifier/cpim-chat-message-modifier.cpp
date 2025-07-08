@@ -59,11 +59,29 @@ const string imdnDispositionNotificationHeader = "Disposition-Notification";
 ChatMessageModifier::Result CpimChatMessageModifier::encode(const shared_ptr<ChatMessage> &message,
                                                             BCTBX_UNUSED(int &errorCode)) {
 	Cpim::Message cpimMessage;
-
-	cpimMessage.addMessageHeader(
-	    Cpim::FromHeader(cpimAddressUri(message->getFromAddress()), cpimAddressDisplayName(message->getFromAddress())));
-	cpimMessage.addMessageHeader(
-	    Cpim::ToHeader(cpimAddressUri(message->getToAddress()), cpimAddressDisplayName(message->getToAddress())));
+	shared_ptr<AbstractChatRoom> chatRoom = message->getChatRoom();
+	const auto &account = chatRoom->getAccount();
+	if (!account) {
+		lWarning() << "Unable to encode CPIM because the account attached to the message is unknown";
+		return ChatMessageModifier::Result::Error;
+	}
+	const bool isBasicChatRoom =
+	    (chatRoom->getCurrentParams()->getChatParams()->getBackend() == ChatParams::Backend::Basic);
+	std::shared_ptr<Address> localDevice;
+	// For non-basic tchat, prefer using the account contact address in case the message from address is the account's
+	// identity address. It will help the server to correctly dispatch requests to the other participants and sender
+	// devices
+	if (!isBasicChatRoom) {
+		localDevice = account->getContactAddress();
+	}
+	if (!localDevice) {
+		localDevice = message->getFromAddress();
+	}
+	localDevice = localDevice->clone()->toSharedPtr();
+	localDevice->setDisplayName("");
+	cpimMessage.addMessageHeader(Cpim::FromHeader(cpimAddressUri(localDevice), cpimAddressDisplayName(localDevice)));
+	const auto &to = message->getToAddress();
+	cpimMessage.addMessageHeader(Cpim::ToHeader(cpimAddressUri(to), cpimAddressDisplayName(to)));
 	cpimMessage.addMessageHeader(Cpim::DateTimeHeader(message->getTime()));
 
 	bool linphoneNamespaceHeaderSet = false;
@@ -306,12 +324,19 @@ CpimChatMessageModifier::createMinimalCpimContentForLimeMessage(const shared_ptr
 	shared_ptr<AbstractChatRoom> chatRoom = message->getChatRoom();
 	const auto &account = chatRoom->getAccount();
 	if (!account) {
-		lWarning() << "Unable to create CPIM becaus the account attached to the message is unknown";
+		lWarning() << "Unable to create CPIM because the account attached to the message is unknown";
 		return Content::create();
 	}
-	const string &localDeviceId = account->getContactAddress()->asStringUriOnly();
-
+	const auto &accountContactAddress = account->getContactAddress();
+	const auto &localDevice =
+	    accountContactAddress ? accountContactAddress : chatRoom->getConferenceId().getLocalAddress();
+	if (!localDevice) {
+		lWarning() << "Unable to create CPIM because " << *account
+		           << " has not registered yet and the chatroom local address is unknown";
+		return Content::create();
+	}
 	Cpim::Message cpimMessage;
+	const string &localDeviceId = localDevice->asStringUriOnly();
 	cpimMessage.addMessageHeader(Cpim::FromHeader(localDeviceId, cpimAddressDisplayName(message->getToAddress())));
 	cpimMessage.addMessageHeader(Cpim::NsHeader(imdnNamespaceUrn, imdnNamespace));
 	cpimMessage.addMessageHeader(

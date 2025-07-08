@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010-2022 Belledonne Communications SARL.
+ * Copyright (c) 2010-2025 Belledonne Communications SARL.
  *
  * This file is part of Liblinphone
  * (see https://gitlab.linphone.org/BC/public/liblinphone).
@@ -36,9 +36,10 @@ extern "C" {
 /**
  * Create a new #LinphoneAccountParams object.
  * @param lc The #LinphoneCore object. @maybenil
+ * @param use_default_values If TRUE, use proxy default values
  * @return The newly created #LinphoneAccountParams object. @notnil
  */
-LINPHONE_PUBLIC LinphoneAccountParams *linphone_account_params_new(LinphoneCore *lc);
+LINPHONE_PUBLIC LinphoneAccountParams *linphone_account_params_new(LinphoneCore *lc, bool_t use_default_values);
 
 /**
  * Create a new #LinphoneAccountParams object from a configuration.
@@ -83,7 +84,7 @@ LINPHONE_PUBLIC void linphone_account_params_set_user_data(LinphoneAccountParams
 LINPHONE_PUBLIC void *linphone_account_params_get_user_data(const LinphoneAccountParams *params);
 
 /**
- * Sets the proxy address
+ * Sets the SIP proxy or registrar address.
  *
  * Examples of valid sip proxy address are:
  * - IP address: sip:87.98.157.38
@@ -95,7 +96,7 @@ LINPHONE_PUBLIC void *linphone_account_params_get_user_data(const LinphoneAccoun
  * @return 0 if successful, -1 otherwise.
  **/
 LINPHONE_PUBLIC LinphoneStatus linphone_account_params_set_server_address(LinphoneAccountParams *params,
-                                                                          LinphoneAddress *server_address);
+                                                                          const LinphoneAddress *server_address);
 
 /**
  * Sets the proxy address
@@ -125,14 +126,14 @@ linphone_account_params_set_server_addr(LinphoneAccountParams *params, const cha
  * @return 0 if successful, -1 otherwise.
  **/
 LINPHONE_PUBLIC LinphoneStatus linphone_account_params_set_identity_address(LinphoneAccountParams *params,
-                                                                            LinphoneAddress *identity);
+                                                                            const LinphoneAddress *identity);
 
 /**
  * Sets a list of SIP route.
  * When a route is set, all outgoing calls will go to the route's destination if this account
  * is the default one (see linphone_core_set_default_account()).
  *
- * @warning This function cannot be used if linphone_account_params_is_outbound_proxy_enabled is TRUE.
+ * @warning This function shall not be used in conjunction with linphone_account_params_enable_outbound_proxy().
  * @param params The #LinphoneAccountParams object. @notnil
  * @param routes A list of routes. \bctbx_list{LinphoneAddress} @maybenil
  * @return -1 if routes are invalid, 0 otherwise.
@@ -333,7 +334,6 @@ LINPHONE_PUBLIC void linphone_account_params_set_realm(LinphoneAccountParams *pa
 /**
  * Gets the list of the routes set for this account params.
  *
- * @warning If linphone_account_params_is_outbound_proxy_enabled is TRUE then it will only return the proxy address.
  * @param params The #LinphoneAccountParams object. @notnil
  * @return The list of routes. \bctbx_list{LinphoneAddress} @maybenil
  */
@@ -373,7 +373,7 @@ linphone_account_params_get_publish_enabled(const LinphoneAccountParams *params)
 LINPHONE_PUBLIC bool_t linphone_account_params_publish_enabled(const LinphoneAccountParams *params);
 
 /**
- * Get the account params proxy address.
+ * Get the account params SIP proxy or registrar address.
  * @param params The #LinphoneAccountParams object. @notnil
  * @return The proxy's SIP #LinphoneAddress. @maybenil
  **/
@@ -656,6 +656,12 @@ linphone_account_params_set_outbound_proxy_enabled(LinphoneAccountParams *params
 
 /**
  * If enabled, the proxy will be used as the only route.
+ * @warning This function will replace or remove any routes previously set with
+ * linphone_account_params_set_routes_addresses() if any. For that reason
+ * linphone_account_params_enable_outbound_proxy() shall not be used with
+ * linphone_account_params_set_routes_addresses(). Application shall consider either using the restrictive notion of
+ * outbound proxy (a single route identical to the registrar URI), either the notion of predefined route-set where
+ * routes can be multiple and different from registrar URI.
  * @param params The #LinphoneAccountParams object. @notnil
  * @param enable TRUE to enable, FALSE otherwise.
  */
@@ -700,6 +706,13 @@ linphone_account_params_get_conference_factory_address(const LinphoneAccountPara
  */
 LINPHONE_PUBLIC const LinphoneAddress *
 linphone_account_params_get_audio_video_conference_factory_address(const LinphoneAccountParams *params);
+
+/**
+ * Get the CCMP user ID.
+ * @param params The #LinphoneAccountParams object @notnil
+ * @return The ID of the CCMP user. @maybenil
+ */
+LINPHONE_PUBLIC const char *linphone_account_params_get_ccmp_user_id(const LinphoneAccountParams *params);
 
 /**
  * Get the CCMP server address.
@@ -762,6 +775,23 @@ LINPHONE_PUBLIC void linphone_account_params_set_push_notification_config(Linpho
  */
 LINPHONE_PUBLIC LinphonePushNotificationConfig *
 linphone_account_params_get_push_notification_config(const LinphoneAccountParams *params);
+
+/**
+ * Sets whether the account will unREGISTER when the core stops but only if the push notifications are not allowed for
+ * the account.
+ * @param params The #LinphoneAccountParams object. @notnil
+ * @param unregister TRUE to unregister the account, FALSE otherwise.
+ */
+LINPHONE_PUBLIC void linphone_account_params_enable_unregister_at_stop(LinphoneAccountParams *params,
+                                                                       bool_t unregister);
+
+/**
+ * Gets whether the account will unREGISTER when the core stops but only if the push notifications are not allowed for
+ * the account.
+ * @param params The #LinphoneAccountParams object. @notnil
+ * @return TRUE if the account will unREGISTER at stop, FALSE otherwise.
+ */
+LINPHONE_PUBLIC bool_t linphone_account_params_unregister_at_stop_enabled(const LinphoneAccountParams *params);
 
 /**
  * Sets the transport type of the server address.
@@ -890,8 +920,10 @@ LINPHONE_PUBLIC void linphone_account_params_set_lime_server_url(LinphoneAccount
 LINPHONE_PUBLIC const char *linphone_account_params_get_lime_server_url(const LinphoneAccountParams *params);
 
 /**
- * Set the base x3dh algorithm.
- * valid algorithms are: c25519, c448 and c25519k512. NULL is also valid, it will unset the value
+ * Set the base(s) x3dh algorithm.
+ * accept an ordered comma separated list (without space) of lime base algorithms
+ * accepted values are a combinaison of : c25519, c448 and c25519k512
+ * NULL is also valid, it will unset the value
  * @param params The #LinphoneAccountParams object. @notnil
  * @param algo The x3dh base algorithm. @maybenil
  **/
@@ -965,6 +997,22 @@ linphone_account_params_get_instant_messaging_encryption_mandatory(const Linphon
  */
 LINPHONE_PUBLIC void linphone_account_params_set_instant_messaging_encryption_mandatory(LinphoneAccountParams *params,
                                                                                         bool_t mandatory);
+
+/**
+ * Gets the list of supported tags.
+ * @param params The #LinphoneAccountParams object. @notnil
+ * @return The list of supported tags \bctbx_list{char *}. @maybenil
+ **/
+LINPHONE_PUBLIC const bctbx_list_t *
+linphone_account_params_get_supported_tags_list(const LinphoneAccountParams *params);
+
+/**
+ * Sets the list of supported tags.
+ * @param params The #LinphoneAccountParams object. @notnil
+ * @param supported_tags The list of supported tags \bctbx_list{char *}. @maybenil
+ */
+LINPHONE_PUBLIC void linphone_account_params_set_supported_tags_list(LinphoneAccountParams *params,
+                                                                     const bctbx_list_t *supported_tags);
 
 /**
  * @}

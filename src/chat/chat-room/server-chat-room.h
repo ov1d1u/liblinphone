@@ -76,13 +76,6 @@ public:
 
 	ServerChatRoom(const std::shared_ptr<Core> &core, const std::shared_ptr<Conference> &conf);
 
-	ServerChatRoom(const std::shared_ptr<Core> &core,
-	               const std::shared_ptr<Address> &peerAddress,
-	               const std::shared_ptr<ConferenceParams> &params,
-	               const std::string &subject,
-	               std::list<std::shared_ptr<Participant>> &&participants,
-	               unsigned int lastNotifyId);
-
 	virtual ~ServerChatRoom();
 
 	std::shared_ptr<Core> getCore() const;
@@ -102,8 +95,6 @@ public:
 	// we go here when receiving the first INVITE, the one that will redirect to newly allocated conference URI.
 	void confirmCreation();
 	void confirmRecreation(SalCallOp *op);
-
-	void subscriptionStateChanged(const std::shared_ptr<EventSubscribe> &event, LinphoneSubscriptionState state);
 
 	LinphoneReason onSipMessageReceived(SalOp *op, const SalMessage *message) override;
 
@@ -140,7 +131,7 @@ public:
 		return mInitiatorDevice;
 	}
 
-	bool removeInvitedParticipants(const std::shared_ptr<Address> &participantAddress);
+	bool removeRegistrationSubscriptionParticipant(const std::shared_ptr<Address> &participantAddress);
 
 	bool subscribeRegistrationForParticipants(const std::list<std::shared_ptr<const Address>> &participants,
 	                                          bool newInvited);
@@ -148,13 +139,6 @@ public:
 	int getUnnotifiedRegistrationSubscriptions() const {
 		return mUnnotifiedRegistrationSubscriptions;
 	}
-
-	void addCachedParticipant(const std::shared_ptr<Participant> &participant);
-	std::shared_ptr<Participant> findCachedParticipant(const std::shared_ptr<const Address> &participantAddress) const;
-	std::shared_ptr<ParticipantDevice>
-	findCachedParticipantDevice(const std::shared_ptr<const CallSession> &session) const;
-	std::list<std::shared_ptr<Participant>> getCachedParticipants() const;
-	void removeCachedParticipant(const std::shared_ptr<Address> &address);
 
 	const std::map<std::string, RegistrationSubscriptionContext> &getRegistrationSubscriptions() const {
 		return mRegistrationSubscriptions;
@@ -168,14 +152,10 @@ private:
 	int mUnnotifiedRegistrationSubscriptions = 0; /*count of not-yet notified registration subscriptions*/
 
 	std::map<std::string, RegistrationSubscriptionContext>
-	    mRegistrationSubscriptions;         /*map of mRegistrationSubscriptions for each participant*/
-	std::list<Address> invitedParticipants; // participants in the process of being added to the chatroom, while for
-	                                        // registration information.
+	    mRegistrationSubscriptions;                           /*map of mRegistrationSubscriptions for each participant*/
+	std::list<Address> mRegistrationSubscriptionParticipants; // participants in the process of being added to the
+	                                                          // chatroom, while for registration information.
 	bool mJoiningPendingAfterCreation = false;
-
-	// list of participant that have been added to the chat room. It includes participants that are currently active in
-	// the chat room as well as past participants.
-	std::list<std::shared_ptr<Participant>> mCachedParticipants;
 
 	/*pointer to the ParticipantDevice that is creating the chat room*/
 	std::shared_ptr<ParticipantDevice> mInitiatorDevice;

@@ -213,8 +213,7 @@ LinphoneFriendListStatus linphone_friend_list_remove_friend(LinphoneFriendList *
 }
 
 const bctbx_list_t *linphone_friend_list_get_friends(const LinphoneFriendList *list) {
-	FriendList::toCpp(list)->getFriends();
-	return FriendList::toCpp(list)->mBctbxFriends;
+	return FriendList::toCpp(list)->getFriendsCList();
 }
 
 void linphone_friend_list_update_dirty_friends(LinphoneFriendList *list) {
@@ -314,7 +313,12 @@ void linphone_friend_list_subscription_state_changed(LinphoneCore *lc,
 }
 
 LinphoneCore *linphone_friend_list_get_core(const LinphoneFriendList *list) {
-	return FriendList::toCpp(list)->getCore()->getCCore();
+	try {
+		auto core = FriendList::toCpp(list)->getCore();
+		return core->getCCore();
+	} catch (std::exception &) {
+	}
+	return nullptr;
 }
 
 LinphoneStatus linphone_friend_list_import_friends_from_vcard4_file(LinphoneFriendList *list, const char *vcard_file) {

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010-2022 Belledonne Communications SARL.
+ * Copyright (c) 2010-2025 Belledonne Communications SARL.
  *
  * This file is part of Liblinphone
  * (see https://gitlab.linphone.org/BC/public/liblinphone).
@@ -28,7 +28,6 @@
 #include "linphone/api/c-address.h"
 #include "linphone/api/c-auth-info.h"
 #include "linphone/core.h"
-#include "linphone/wrapper_utils.h"
 #include "tester_utils.h"
 
 // enum the different methods for the client to retrieve the certificate
@@ -152,7 +151,7 @@ static void add_tls_client_certificate(LinphoneCore *lc,
 	}
 }
 
-static void TLS_mandatory_two_users_curve(const int curveId) {
+static void TLS_mandatory_two_users_curve(const LinphoneTesterLimeAlgo curveId) {
 	LinphoneCoreManager *lcm = linphone_core_manager_create(NULL);
 	add_user_to_core_config(lcm->lc, "sip:user_1@sip.example.org", "user_1", "sip.example.org",
 	                        "sip:sip.example.org; transport=tls", "secret");
@@ -180,15 +179,15 @@ static void TLS_mandatory_two_users_curve(const int curveId) {
 }
 
 static void TLS_mandatory_two_users(void) {
-	TLS_mandatory_two_users_curve(25519);
-	TLS_mandatory_two_users_curve(448);
+	TLS_mandatory_two_users_curve(C25519);
+	TLS_mandatory_two_users_curve(C448);
 }
 
 // code readability, use name which means something instead of a list of true and false in the args
 constexpr bool tls_mandatory = true;
 constexpr bool tls_optional = false;
 
-static void create_user_sip_client_cert_chain(const int curveId,
+static void create_user_sip_client_cert_chain(const LinphoneTesterLimeAlgo curveId,
                                               const bool use_tls,
                                               const certProvider method,
                                               const std::string &cert,
@@ -227,8 +226,13 @@ static void identity_in_altName_one_DNS_entry(void) {
 	const std::string cert_path{"certificates/client/user1_cert.pem"};
 	const std::string key_path{"certificates/client/user1_key.pem"};
 	for (const auto &certProv : availCertProv) {
-		create_user_sip_client_cert_chain(25519, tls_mandatory, certProv, cert_path, key_path, false);
-		create_user_sip_client_cert_chain(448, tls_mandatory, certProv, cert_path, key_path, false);
+		create_user_sip_client_cert_chain(C25519, tls_mandatory, certProv, cert_path, key_path, false);
+		create_user_sip_client_cert_chain(C448, tls_mandatory, certProv, cert_path, key_path, false);
+		if (liblinphone_tester_is_lime_PQ_available()) {
+			create_user_sip_client_cert_chain(C25519K512, tls_mandatory, certProv, cert_path, key_path, false);
+			create_user_sip_client_cert_chain(C25519MLK512, tls_mandatory, certProv, cert_path, key_path, false);
+			create_user_sip_client_cert_chain(C448MLK1024, tls_mandatory, certProv, cert_path, key_path, false);
+		}
 	}
 }
 
@@ -239,8 +243,16 @@ static void identity_in_subject_CN(void) {
 	const std::string cert_path{"certificates/client/user2_CN_cert.pem"};
 	const std::string key_path{"certificates/client/user2_CN_key.pem"};
 	for (const auto &certProv : availCertProv) {
-		create_user_sip_client_cert_chain(25519, tls_mandatory, certProv, cert_path, key_path, false, "user_2");
-		create_user_sip_client_cert_chain(448, tls_mandatory, certProv, cert_path, key_path, false, "user_2");
+		create_user_sip_client_cert_chain(C25519, tls_mandatory, certProv, cert_path, key_path, false, "user_2");
+		create_user_sip_client_cert_chain(C448, tls_mandatory, certProv, cert_path, key_path, false, "user_2");
+		if (liblinphone_tester_is_lime_PQ_available()) {
+			create_user_sip_client_cert_chain(C25519K512, tls_mandatory, certProv, cert_path, key_path, false,
+			                                  "user_2");
+			create_user_sip_client_cert_chain(C25519MLK512, tls_mandatory, certProv, cert_path, key_path, false,
+			                                  "user_2");
+			create_user_sip_client_cert_chain(C448MLK1024, tls_mandatory, certProv, cert_path, key_path, false,
+			                                  "user_2");
+		}
 	}
 }
 
@@ -252,8 +264,13 @@ static void identity_in_altName_multiple_DNS_entry(void) {
 	const std::string cert_path{"certificates/client/user1_multiple_aliases_cert.pem"};
 	const std::string key_path{"certificates/client/user1_multiple_aliases_key.pem"};
 	for (const auto &certProv : availCertProv) {
-		create_user_sip_client_cert_chain(25519, tls_mandatory, certProv, cert_path, key_path, false);
-		create_user_sip_client_cert_chain(448, tls_mandatory, certProv, cert_path, key_path, false);
+		create_user_sip_client_cert_chain(C25519, tls_mandatory, certProv, cert_path, key_path, false);
+		create_user_sip_client_cert_chain(C448, tls_mandatory, certProv, cert_path, key_path, false);
+		if (liblinphone_tester_is_lime_PQ_available()) {
+			create_user_sip_client_cert_chain(C25519K512, tls_mandatory, certProv, cert_path, key_path, false);
+			create_user_sip_client_cert_chain(C25519MLK512, tls_mandatory, certProv, cert_path, key_path, false);
+			create_user_sip_client_cert_chain(C448MLK1024, tls_mandatory, certProv, cert_path, key_path, false);
+		}
 	}
 }
 
@@ -264,8 +281,15 @@ static void revoked_certificate(void) {
 	const std::string cert_path{"certificates/client/user2_revoked_cert.pem"};
 	const std::string key_path{"certificates/client/user2_revoked_key.pem"};
 	for (const auto &certProv : availCertProv) {
-		create_user_sip_client_cert_chain(25519, tls_mandatory, certProv, cert_path, key_path, true, "user_2");
-		create_user_sip_client_cert_chain(448, tls_mandatory, certProv, cert_path, key_path, true, "user_2");
+		create_user_sip_client_cert_chain(C25519, tls_mandatory, certProv, cert_path, key_path, true, "user_2");
+		create_user_sip_client_cert_chain(C448, tls_mandatory, certProv, cert_path, key_path, true, "user_2");
+		if (liblinphone_tester_is_lime_PQ_available()) {
+			create_user_sip_client_cert_chain(C25519K512, tls_mandatory, certProv, cert_path, key_path, true, "user_2");
+			create_user_sip_client_cert_chain(C25519MLK512, tls_mandatory, certProv, cert_path, key_path, true,
+			                                  "user_2");
+			create_user_sip_client_cert_chain(C448MLK1024, tls_mandatory, certProv, cert_path, key_path, true,
+			                                  "user_2");
+		}
 	}
 }
 
@@ -277,8 +301,13 @@ static void TLS_mandatory_CN_UserId_mismatch(void) {
 	const std::string cert_path{"certificates/client/cert2.pem"};
 	const std::string key_path{"certificates/client/key2.pem"};
 	for (const auto &certProv : availCertProv) {
-		create_user_sip_client_cert_chain(25519, tls_mandatory, certProv, cert_path, key_path, true);
-		create_user_sip_client_cert_chain(448, tls_mandatory, certProv, cert_path, key_path, true);
+		create_user_sip_client_cert_chain(C25519, tls_mandatory, certProv, cert_path, key_path, true);
+		create_user_sip_client_cert_chain(C448, tls_mandatory, certProv, cert_path, key_path, true);
+		if (liblinphone_tester_is_lime_PQ_available()) {
+			create_user_sip_client_cert_chain(C25519K512, tls_mandatory, certProv, cert_path, key_path, true);
+			create_user_sip_client_cert_chain(C25519MLK512, tls_mandatory, certProv, cert_path, key_path, true);
+			create_user_sip_client_cert_chain(C448MLK1024, tls_mandatory, certProv, cert_path, key_path, true);
+		}
 	}
 }
 
@@ -290,8 +319,13 @@ static void TLS_optional_CN_UserId_mismatch(void) {
 	const std::string cert_path{"certificates/client/cert2.pem"};
 	const std::string key_path{"certificates/client/key2.pem"};
 	for (const auto &certProv : availCertProv) {
-		create_user_sip_client_cert_chain(25519, tls_optional, certProv, cert_path, key_path, true);
-		create_user_sip_client_cert_chain(448, tls_optional, certProv, cert_path, key_path, true);
+		create_user_sip_client_cert_chain(C25519, tls_optional, certProv, cert_path, key_path, true);
+		create_user_sip_client_cert_chain(C448, tls_optional, certProv, cert_path, key_path, true);
+		if (liblinphone_tester_is_lime_PQ_available()) {
+			create_user_sip_client_cert_chain(C25519K512, tls_optional, certProv, cert_path, key_path, true);
+			create_user_sip_client_cert_chain(C25519MLK512, tls_optional, certProv, cert_path, key_path, true);
+			create_user_sip_client_cert_chain(C448MLK1024, tls_optional, certProv, cert_path, key_path, true);
+		}
 	}
 }
 
@@ -301,8 +335,13 @@ static void TLS_optional_CN_UserId_mismatch(void) {
 static void TLS_optional_No_certificate(void) {
 	const std::string empty{};
 	/* just use the config_sip method, each method shall actually just do nothing when given an empty certificate */
-	create_user_sip_client_cert_chain(25519, tls_optional, certProvider::config_sip, empty, empty, false);
-	create_user_sip_client_cert_chain(448, tls_optional, certProvider::config_sip, empty, empty, false);
+	create_user_sip_client_cert_chain(C25519, tls_optional, certProvider::config_sip, empty, empty, false);
+	create_user_sip_client_cert_chain(C448, tls_optional, certProvider::config_sip, empty, empty, false);
+	if (liblinphone_tester_is_lime_PQ_available()) {
+		create_user_sip_client_cert_chain(C25519K512, tls_optional, certProvider::config_sip, empty, empty, false);
+		create_user_sip_client_cert_chain(C25519MLK512, tls_optional, certProvider::config_sip, empty, empty, false);
+		create_user_sip_client_cert_chain(C448MLK1024, tls_optional, certProvider::config_sip, empty, empty, false);
+	}
 }
 
 /**
@@ -311,15 +350,20 @@ static void TLS_optional_No_certificate(void) {
 static void TLS_mandatory_No_certificate(void) {
 	const std::string empty{};
 	/* just use the config_sip method, each method shall actually just do nothing when given an empty certificate */
-	create_user_sip_client_cert_chain(25519, tls_mandatory, certProvider::config_sip, empty, empty, true);
-	create_user_sip_client_cert_chain(448, tls_mandatory, certProvider::config_sip, empty, empty, true);
+	create_user_sip_client_cert_chain(C25519, tls_mandatory, certProvider::config_sip, empty, empty, true);
+	create_user_sip_client_cert_chain(C448, tls_mandatory, certProvider::config_sip, empty, empty, true);
+	if (liblinphone_tester_is_lime_PQ_available()) {
+		create_user_sip_client_cert_chain(C25519K512, tls_mandatory, certProvider::config_sip, empty, empty, true);
+		create_user_sip_client_cert_chain(C25519MLK512, tls_mandatory, certProvider::config_sip, empty, empty, true);
+		create_user_sip_client_cert_chain(C448MLK1024, tls_mandatory, certProvider::config_sip, empty, empty, true);
+	}
 }
 
 static void local_set_lime_server_and_curve(LinphoneCoreManager *manager, const char *curve, const char *server) {
-	linphone_config_set_string(linphone_core_get_config(manager->lc), "lime", "curve", curve);
 	LinphoneAccount *account = linphone_core_get_default_account(manager->lc);
 	const LinphoneAccountParams *account_params = linphone_account_get_params(account);
 	LinphoneAccountParams *new_account_params = linphone_account_params_clone(account_params);
+	linphone_account_params_set_lime_algo(new_account_params, curve);
 	linphone_account_params_set_lime_server_url(new_account_params, server);
 	linphone_account_set_params(account, new_account_params);
 	linphone_account_params_unref(new_account_params);
@@ -328,7 +372,7 @@ static void local_set_lime_server_and_curve(LinphoneCoreManager *manager, const 
 /**
  * Create a user registered on lime on sip.example.org and auth1.example.org using the same lime server
  */
-static void Digest_Auth_multidomains_curve(const int curveId) {
+static void Digest_Auth_multidomains_curve(const LinphoneTesterLimeAlgo curveId) {
 	LinphoneCoreManager *marie = linphone_core_manager_create("marie_rc");
 	LinphoneCoreManager *libtester = linphone_core_manager_create(NULL);
 	add_user_to_core_config(libtester->lc, "sip:liblinphone_tester@auth1.example.org", "liblinphone_tester",
@@ -338,13 +382,8 @@ static void Digest_Auth_multidomains_curve(const int curveId) {
 	coresManagerList = bctbx_list_append(coresManagerList, libtester);
 
 	// We use a specific server here, so do not use the generic set_lime_server_and_curve function
-	if (curveId == 448) {
-		local_set_lime_server_and_curve(marie, "c448", lime_server_any_domain_c448_url);
-		local_set_lime_server_and_curve(libtester, "c448", lime_server_any_domain_c448_url);
-	} else {
-		local_set_lime_server_and_curve(marie, "c25519", lime_server_any_domain_c25519_url);
-		local_set_lime_server_and_curve(libtester, "c25519", lime_server_any_domain_c25519_url);
-	}
+	local_set_lime_server_and_curve(marie, limeAlgoEnum2String(curveId), lime_server_any_domain_url);
+	local_set_lime_server_and_curve(libtester, limeAlgoEnum2String(curveId), lime_server_any_domain_url);
 
 	stats initialMarieStats = marie->stat;
 	stats initialLibtesterStats = libtester->stat;
@@ -365,30 +404,26 @@ static void Digest_Auth_multidomains_curve(const int curveId) {
 }
 
 static void Digest_Auth_multidomains(void) {
-	Digest_Auth_multidomains_curve(25519);
-	Digest_Auth_multidomains_curve(448);
+	Digest_Auth_multidomains_curve(C25519);
+	Digest_Auth_multidomains_curve(C448);
+	if (liblinphone_tester_is_lime_PQ_available()) {
+		Digest_Auth_multidomains_curve(C25519K512);
+		Digest_Auth_multidomains_curve(C25519MLK512);
+		Digest_Auth_multidomains_curve(C448MLK1024);
+	}
 }
 
-static void Digest_Auth_multiservers_curve(const int curveId) {
+static void Digest_Auth_multiservers_curve(const LinphoneTesterLimeAlgo curveId) {
 	LinphoneCoreManager *manager = linphone_core_manager_create("multi_account_rc");
 	bctbx_list_t *coresManagerList = NULL;
 	coresManagerList = bctbx_list_append(coresManagerList, manager);
-
-	if (curveId == 448) {
-		linphone_config_set_string(linphone_core_get_config(manager->lc), "lime", "curve", "c448");
-	} else {
-		linphone_config_set_string(linphone_core_get_config(manager->lc), "lime", "curve", "c25519");
-	}
 
 	LinphoneAccount *marie_account = linphone_core_get_account_by_idkey(manager->lc, "eric");
 	BC_ASSERT_PTR_NOT_NULL(marie_account);
 	if (marie_account) {
 		LinphoneAccountParams *params = linphone_account_params_clone(linphone_account_get_params(marie_account));
-		if (curveId == 448) {
-			linphone_account_params_set_lime_server_url(params, lime_server_c448_url);
-		} else {
-			linphone_account_params_set_lime_server_url(params, lime_server_c25519_url);
-		}
+		linphone_account_params_set_lime_algo(params, limeAlgoEnum2String(curveId));
+		linphone_account_params_set_lime_server_url(params, lime_server_url);
 		linphone_account_set_params(marie_account, params);
 		linphone_account_params_unref(params);
 	}
@@ -397,11 +432,8 @@ static void Digest_Auth_multiservers_curve(const int curveId) {
 	BC_ASSERT_PTR_NOT_NULL(pauline_account);
 	if (pauline_account) {
 		LinphoneAccountParams *params = linphone_account_params_clone(linphone_account_get_params(pauline_account));
-		if (curveId == 448) {
-			linphone_account_params_set_lime_server_url(params, lime_server_any_domain_c448_url);
-		} else {
-			linphone_account_params_set_lime_server_url(params, lime_server_any_domain_c25519_url);
-		}
+		linphone_account_params_set_lime_algo(params, limeAlgoEnum2String(curveId));
+		linphone_account_params_set_lime_server_url(params, lime_server_any_domain_url);
 		linphone_account_set_params(pauline_account, params);
 		linphone_account_params_unref(params);
 	}
@@ -421,29 +453,28 @@ static void Digest_Auth_multiservers_curve(const int curveId) {
 }
 
 static void Digest_Auth_multiservers(void) {
-	Digest_Auth_multiservers_curve(25519);
-	Digest_Auth_multiservers_curve(448);
+	Digest_Auth_multiservers_curve(C25519);
+	Digest_Auth_multiservers_curve(C448);
+	if (liblinphone_tester_is_lime_PQ_available()) {
+		Digest_Auth_multiservers_curve(C25519K512);
+		Digest_Auth_multiservers_curve(C25519MLK512);
+		Digest_Auth_multiservers_curve(C448MLK1024);
+	}
 }
 
-const char *wrong_lime_server = "https://lime.wildcard8.linphone.org:8443/lime-server-%s/lime-server.php";
-
-static void invalid_lime_server_in_account_curve(const int curveId) {
+static void invalid_lime_server_in_account_curve(const LinphoneTesterLimeAlgo curveId,
+                                                 const std::string &wrongLimeServerUrl) {
 	LinphoneCoreManager *marie = linphone_core_manager_create("marie_rc");
 	linphone_core_manager_skip_lime_user_creation_asserts(marie, TRUE);
 	bctbx_list_t *coresManagerList = NULL;
 	coresManagerList = bctbx_list_append(coresManagerList, marie);
 
-	const char *curve = (curveId == 448) ? "c448" : "c25519";
-	linphone_config_set_string(linphone_core_get_config(marie->lc), "lime", "curve", curve);
-
-	char lime_server_url[80];
-	sprintf(lime_server_url, wrong_lime_server, curve);
-
 	LinphoneAccount *marie_account = linphone_core_get_default_account(marie->lc);
 	BC_ASSERT_PTR_NOT_NULL(marie_account);
 	if (marie_account) {
 		LinphoneAccountParams *params = linphone_account_params_clone(linphone_account_get_params(marie_account));
-		linphone_account_params_set_lime_server_url(params, lime_server_url);
+		linphone_account_params_set_lime_algo(params, limeAlgoEnum2String(curveId));
+		linphone_account_params_set_lime_server_url(params, wrongLimeServerUrl.c_str());
 		linphone_account_set_params(marie_account, params);
 		linphone_account_params_unref(params);
 	}
@@ -452,21 +483,36 @@ static void invalid_lime_server_in_account_curve(const int curveId) {
 	bctbx_list_t *coresList = init_core_for_conference(coresManagerList);
 	start_core_for_conference(coresManagerList);
 
-	// Wait for lime users to be created on X3DH server, but only for Marie & Pauline
+	// Wait for lime user to be created on X3DH server: it shall fail
 	BC_ASSERT_FALSE(wait_for_list(coresList, &marie->stat.number_of_X3dhUserCreationSuccess,
 	                              initialStats.number_of_X3dhUserCreationSuccess + 1, x3dhServer_creationTimeout));
 	BC_ASSERT_TRUE(wait_for_list(coresList, &marie->stat.number_of_X3dhUserCreationFailure,
-	                             initialStats.number_of_X3dhUserCreationFailure + 1, x3dhServer_creationTimeout));
-	BC_ASSERT_EQUAL(marie->stat.number_of_X3dhUserCreationFailure, 1, int, "%d");
+	                             initialStats.number_of_X3dhUserCreationFailure + 2, x3dhServer_creationTimeout));
+	BC_ASSERT_EQUAL(marie->stat.number_of_X3dhUserCreationFailure, 2, int, "%d");
 
 	bctbx_list_free(coresList);
 	bctbx_list_free(coresManagerList);
 	linphone_core_manager_destroy(marie);
 }
 
-static void invalid_lime_server_in_account(void) {
-	invalid_lime_server_in_account_curve(25519);
-	invalid_lime_server_in_account_curve(448);
+static void invalid_lime_server_in_account() {
+	// Server does not exists - unreachable
+	const std::string wrongLimeServer = "https://lime.wildcard8.linphone.org:8443/lime-server/lime-server.php";
+	// URL is not valid
+	const std::string unparsableLimeServer = "ThisIsNotAnURL";
+
+	invalid_lime_server_in_account_curve(C25519, wrongLimeServer);
+	invalid_lime_server_in_account_curve(C448, wrongLimeServer);
+	invalid_lime_server_in_account_curve(C25519, unparsableLimeServer);
+	invalid_lime_server_in_account_curve(C448, unparsableLimeServer);
+	if (liblinphone_tester_is_lime_PQ_available()) {
+		invalid_lime_server_in_account_curve(C25519K512, wrongLimeServer);
+		invalid_lime_server_in_account_curve(C25519MLK512, wrongLimeServer);
+		invalid_lime_server_in_account_curve(C448MLK1024, wrongLimeServer);
+		invalid_lime_server_in_account_curve(C25519K512, unparsableLimeServer);
+		invalid_lime_server_in_account_curve(C25519MLK512, unparsableLimeServer);
+		invalid_lime_server_in_account_curve(C448MLK1024, unparsableLimeServer);
+	}
 }
 
 test_t lime_server_auth_tests[] = {

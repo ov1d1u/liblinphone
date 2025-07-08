@@ -56,6 +56,17 @@ typedef void (*LinphoneAccountCbsMessageWaitingIndicationChangedCb)(LinphoneAcco
                                                                     const LinphoneMessageWaitingIndication *mwi);
 
 /**
+ * Callback for notifying that the conference information list of an account has been updated.
+ * This is generally the case when retrieving conference informations from a CCMP server as the request might take a
+ * little bit of time to be responded. In order to allow the core to perform its tasks while the conference information
+ * are being sent, the core will send first the list of conference information that are locally stored and then this
+ * callback is called once it is updated with the information received by the CCMP server.
+ * @param account #LinphoneAccount object whose message waiting indication changed. @notnil
+ * @param infos The updated list of conference informations \bctbx_list{LinphoneConferenceInfo} @notnil
+ */
+typedef void (*LinphoneAccountCbsConferenceInformationUpdatedCb)(LinphoneAccount *account, const bctbx_list_t *infos);
+
+/**
  * @}
  **/
 
@@ -273,6 +284,14 @@ typedef void (*LinphoneCallCbsAudioDeviceChangedCb)(LinphoneCall *call, Linphone
  * @param recording TRUE if the call is being recorded by the remote, FALSE otherwise
  */
 typedef void (*LinphoneCallCbsRemoteRecordingCb)(LinphoneCall *call, bool_t recording);
+
+/**
+ * Callback to notify that Baudot tones have been detected in the audio received from the remote.
+ *
+ * @param call LinphoneCall where Baudot tones have been detected @notnil
+ * @param standard The Baudot standard of the detected tones.
+ */
+typedef void (*LinphoneCallCbsBaudotDetectedCb)(LinphoneCall *call, LinphoneBaudotStandard standard);
 
 /**
  * @}
@@ -705,8 +724,17 @@ typedef void (*LinphoneMagicSearchCbsSearchResultsReceivedCb)(LinphoneMagicSearc
  * Callback used to notify when LDAP have more results available.
  * @param magic_search #LinphoneMagicSearch object @notnil
  * @param ldap #LinphoneLdap object @notnil
+ * @deprecated 18/11/2024 use #LinphoneMagicSearchCbsMoreResultsAvailableCb instead.
  */
 typedef void (*LinphoneMagicSearchCbsLdapHaveMoreResultsCb)(LinphoneMagicSearch *magic_search, LinphoneLdap *ldap);
+
+/**
+ * Callback used to notify when more results are available for a given #LinphoneMagicSearchSource flag.
+ * @param magic_search #LinphoneMagicSearch object @notnil
+ * @param source The source flag indicating for which type of result there is more results available.
+ */
+typedef void (*LinphoneMagicSearchCbsMoreResultsAvailableCb)(LinphoneMagicSearch *magic_search,
+                                                             LinphoneMagicSearchSource source);
 
 /**
  * @}
@@ -740,6 +768,12 @@ typedef void (*LinphoneChatMessageStateChangedCb)(LinphoneChatMessage *message,
  * @addtogroup conference
  * @{
  */
+
+/**
+ * Callback used to notify a conference that the list of participants allowed to join the conference has changed.
+ * @param[in] conference #LinphoneConference object @notnil
+ */
+typedef void (*LinphoneConferenceCbsAllowedParticipantListChangedCb)(LinphoneConference *conference);
 
 /**
  * Callback used to notify a conference that a participant has been added.
@@ -857,7 +891,7 @@ typedef void (*LinphoneConferenceCbsAudioDeviceChangedCb)(LinphoneConference *co
                                                           const LinphoneAudioDevice *audio_device);
 
 /**
- * Callback used to notify a conference that a participant has been added.
+ * Callback used to notify a conference that a participant device has been added.
  * @param[in] conference #LinphoneConference object @notnil
  * @param[in] participant_device #LinphoneParticipantDevice that has been added to the conference @notnil
  */
@@ -865,7 +899,7 @@ typedef void (*LinphoneConferenceCbsParticipantDeviceAddedCb)(LinphoneConference
                                                               LinphoneParticipantDevice *participant_device);
 
 /**
- * Callback used to notify a conference that a participant has been removed.
+ * Callback used to notify a conference that a participant device has been removed.
  * @param[in] conference #LinphoneConference object @notnil
  * @param[in] participant_device #LinphoneParticipantDevice that has been removed to the conference @notnil
  */
@@ -873,9 +907,17 @@ typedef void (*LinphoneConferenceCbsParticipantDeviceRemovedCb)(LinphoneConferen
                                                                 const LinphoneParticipantDevice *participant_device);
 
 /**
+ * Callback used to notify a conference that a participant has requested to join the conference.
+ * @param[in] conference #LinphoneConference object @notnil
+ * @param[in] participant_device #LinphoneParticipantDevice that has requested to join the conference @notnil
+ */
+typedef void (*LinphoneConferenceCbsParticipantDeviceJoiningRequestCb)(LinphoneConference *conference,
+                                                                       LinphoneParticipantDevice *participant_device);
+
+/**
  * Callback used to notify which participant device video is being displayed as "actively speaking".
  * @param[in] conference #LinphoneConference object @notnil
- * @param[in] participant_device the participant device currently displayed as active speaker @notnil
+ * @param[in] participant_device the participant device currently displayed as active speaker @maybenil
  */
 typedef void (*LinphoneConferenceCbsActiveSpeakerParticipantDeviceCb)(
     LinphoneConference *conference, const LinphoneParticipantDevice *participant_device);

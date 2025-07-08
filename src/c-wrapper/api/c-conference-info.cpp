@@ -46,6 +46,12 @@ void linphone_conference_info_unref(LinphoneConferenceInfo *conference_info) {
 	ConferenceInfo::toCpp(conference_info)->unref();
 }
 
+const LinphoneParticipantInfo *
+linphone_conference_info_get_organizer_info(const LinphoneConferenceInfo *conference_info) {
+	const auto &organizer = ConferenceInfo::toCpp(conference_info)->getOrganizer();
+	return organizer ? organizer->toC() : nullptr;
+}
+
 const LinphoneAddress *linphone_conference_info_get_organizer(const LinphoneConferenceInfo *conference_info) {
 	const auto &address = ConferenceInfo::toCpp(conference_info)->getOrganizerAddress();
 	return address && address->isValid() ? address->toC() : nullptr;
@@ -81,7 +87,7 @@ void linphone_conference_info_set_participant_infos(LinphoneConferenceInfo *conf
 void linphone_conference_info_add_participant_infos(LinphoneConferenceInfo *conference_info,
                                                     const bctbx_list_t *participant_infos) {
 	const std::list<std::shared_ptr<LinphonePrivate::ParticipantInfo>> participantInfos =
-	    ParticipantInfo::getCppListFromCList(participant_infos);
+	    Utils::bctbxListToCppSharedPtrList<LinphoneParticipantInfo, ParticipantInfo>(participant_infos);
 	ConferenceInfo::toCpp(conference_info)->addParticipants(participantInfos);
 }
 
@@ -131,6 +137,14 @@ void linphone_conference_info_set_date_time(LinphoneConferenceInfo *conference_i
 	ConferenceInfo::toCpp(conference_info)->setDateTime(datetime);
 }
 
+time_t linphone_conference_info_get_earlier_joining_time(const LinphoneConferenceInfo *info) {
+	return ConferenceInfo::toCpp(info)->getEarlierJoiningTime();
+}
+
+time_t linphone_conference_info_get_expiry_time(const LinphoneConferenceInfo *info) {
+	return ConferenceInfo::toCpp(info)->getExpiryTime();
+}
+
 unsigned int linphone_conference_info_get_duration(const LinphoneConferenceInfo *conference_info) {
 	return ConferenceInfo::toCpp(conference_info)->getDuration();
 }
@@ -145,6 +159,14 @@ const char *linphone_conference_info_get_subject(const LinphoneConferenceInfo *c
 
 void linphone_conference_info_set_subject(LinphoneConferenceInfo *conference_info, const char *subject) {
 	ConferenceInfo::toCpp(conference_info)->setSubject(L_C_TO_STRING(subject));
+}
+
+const char *linphone_conference_info_get_subject_utf8(const LinphoneConferenceInfo *conference_info) {
+	return L_STRING_TO_C(ConferenceInfo::toCpp(conference_info)->getUtf8Subject());
+}
+
+void linphone_conference_info_set_subject_utf8(LinphoneConferenceInfo *conference_info, const char *subject) {
+	ConferenceInfo::toCpp(conference_info)->setUtf8Subject(L_C_TO_STRING(subject));
 }
 
 void linphone_conference_info_set_ics_sequence(LinphoneConferenceInfo *conference_info, unsigned int sequence) {
@@ -177,6 +199,14 @@ const char *linphone_conference_info_get_description(const LinphoneConferenceInf
 
 void linphone_conference_info_set_description(LinphoneConferenceInfo *conference_info, const char *description) {
 	ConferenceInfo::toCpp(conference_info)->setDescription(L_C_TO_STRING(description));
+}
+
+const char *linphone_conference_info_get_description_utf8(const LinphoneConferenceInfo *conference_info) {
+	return L_STRING_TO_C(ConferenceInfo::toCpp(conference_info)->getUtf8Description());
+}
+
+void linphone_conference_info_set_description_utf8(LinphoneConferenceInfo *conference_info, const char *description) {
+	ConferenceInfo::toCpp(conference_info)->setUtf8Description(L_C_TO_STRING(description));
 }
 
 LinphoneConferenceSecurityLevel

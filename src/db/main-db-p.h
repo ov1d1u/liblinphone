@@ -56,7 +56,9 @@ private:
 	// ---------------------------------------------------------------------------
 	// Low level API.
 	// ---------------------------------------------------------------------------
+	long long insertSipAddress(const Address &address);
 	long long insertSipAddress(const std::shared_ptr<Address> &address);
+	long long insertSipAddress(const std::string &sipAddress, const std::string &displayName);
 	void insertContent(long long chatMessageId, const Content &content);
 	long long insertContentType(const std::string &contentType);
 	long long
@@ -85,11 +87,16 @@ private:
 	                                                  bool deleted,
 	                                                  const ParticipantInfo::participant_params_t params,
 	                                                  bool isOrganizer,
-	                                                  bool isParticipant);
+	                                                  bool isParticipant,
+	                                                  const std::string ccmpUri);
+	long long insertOrUpdateConferenceInfoOrganizer(long long conferenceInfoId,
+	                                                const std::shared_ptr<ParticipantInfo> &organizer,
+	                                                bool isParticipant);
 	long long insertOrUpdateConferenceInfoOrganizer(long long conferenceInfoId,
 	                                                long long organizerSipAddressId,
 	                                                const ParticipantInfo::participant_params_t params,
-	                                                bool isParticipant);
+	                                                bool isParticipant,
+	                                                const std::string ccmpUri);
 	void insertOrUpdateConferenceInfoParticipantParams(long long conferenceInfoParticipantId,
 	                                                   const ParticipantInfo::participant_params_t params) const;
 
@@ -100,9 +107,13 @@ private:
 	long long insertOrUpdateFriendList(const std::shared_ptr<FriendList> &list);
 	long long insertOrUpdateDevice(const std::shared_ptr<Address> &addressWithGruu, const std::string &displayName);
 
+	long long selectSipAddressId(const Address &address, const bool caseSensitive) const;
 	long long selectSipAddressId(const std::string &sipAddress, const bool caseSensitive) const;
 	long long selectSipAddressId(const std::shared_ptr<Address> &address, const bool caseSensitive) const;
 	std::string selectSipAddressFromId(long long sipAddressId) const;
+	void deleteChatRoom(const long long &dbId) const;
+	void deleteChatRoom(const ConferenceId &conferenceId);
+	long long selectChatRoomId(long long peerSipAddressId) const;
 	long long selectChatRoomId(long long peerSipAddressId, long long localSipAddressId) const;
 	long long selectChatRoomId(const ConferenceId &conferenceId) const;
 	ConferenceId selectConferenceId(const long long chatRoomId) const;
@@ -207,6 +218,7 @@ private:
 
 #ifdef HAVE_DB_STORAGE
 	std::shared_ptr<ConferenceInfo> selectConferenceInfo(const soci::row &row);
+	long long findExpiredConferenceId(const std::shared_ptr<Address> &uri);
 #endif
 
 	// ---------------------------------------------------------------------------
@@ -235,7 +247,7 @@ private:
 	std::shared_ptr<CallLog> getCallLogFromCache(long long storageId) const;
 	std::shared_ptr<ConferenceInfo> getConferenceInfoFromCache(long long storageId) const;
 
-	void invalidConferenceEventsFromQuery(const std::string &query, long long chatRoomId);
+	void invalidConferenceEventsFromQuery(const std::string &query, long long chatRoomId) const;
 
 	// ---------------------------------------------------------------------------
 	// Versions.
@@ -250,9 +262,9 @@ private:
 	// ---------------------------------------------------------------------------
 
 #ifdef HAVE_DB_STORAGE
-	void importLegacyFriends(DbSession &inDbSession);
-	void importLegacyHistory(DbSession &inDbSession);
-	void importLegacyCallLogs(DbSession &inDbSession);
+	bool importLegacyFriends(DbSession &inDbSession);
+	bool importLegacyHistory(DbSession &inDbSession);
+	bool importLegacyCallLogs(DbSession &inDbSession);
 #endif
 
 	// ---------------------------------------------------------------------------

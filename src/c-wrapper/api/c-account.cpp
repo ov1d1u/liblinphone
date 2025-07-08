@@ -302,6 +302,11 @@ void _linphone_account_notify_registration_state_changed(LinphoneAccount *accoun
 	                                  linphone_account_cbs_get_registration_state_changed, state, message);
 }
 
+void _linphone_account_notify_conference_information_updated(LinphoneAccount *account, const bctbx_list_t *infos) {
+	LINPHONE_HYBRID_OBJECT_INVOKE_CBS(Account, Account::toCpp(account),
+	                                  linphone_account_cbs_get_conference_information_updated, infos);
+}
+
 bool_t linphone_account_is_phone_number(const LinphoneAccount *account, const char *username) {
 	AccountLogContextualizer logContextualizer(account);
 	if (!username) return FALSE;
@@ -324,23 +329,6 @@ bool_t linphone_account_is_phone_number(const LinphoneAccount *account, const ch
 	return TRUE;
 }
 
-static char *linphone_account_flatten_phone_number(const char *number) {
-	char *unescaped_phone_number = belle_sip_username_unescape_unnecessary_characters(number);
-	char *result = reinterpret_cast<char *>(ms_malloc0(strlen(unescaped_phone_number) + 1));
-	char *w = result;
-	const char *r;
-
-	for (r = unescaped_phone_number; *r != '\0'; ++r) {
-		if (*r == '+' || isdigit(*r)) {
-			*w++ = *r;
-		}
-	}
-
-	*w++ = '\0';
-	belle_sip_free(unescaped_phone_number);
-	return result;
-}
-
 char *linphone_account_normalize_phone_number(const LinphoneAccount *account, const char *username) {
 	AccountLogContextualizer logContextualizer(account);
 
@@ -357,13 +345,13 @@ char *linphone_account_normalize_phone_number(const LinphoneAccount *account, co
 		dial_prefix = linphone_account_params_get_international_prefix(accountParams);
 		dial_escape_plus = linphone_account_params_dial_escape_plus_enabled(accountParams);
 	} else {
-		LinphoneAccountParams *accountParams = linphone_account_params_new(NULL);
+		LinphoneAccountParams *accountParams = linphone_account_params_new(nullptr, FALSE);
 		dial_prefix = linphone_account_params_get_international_prefix(accountParams);
 		dial_escape_plus = linphone_account_params_dial_escape_plus_enabled(accountParams);
 		linphone_account_params_unref(accountParams);
 	}
 
-	char *flatten = linphone_account_flatten_phone_number(username);
+	char *flatten = ms_strdup(Utils::flattenPhoneNumber(username).c_str());
 	lDebug() << "Flattened number is [" << flatten << "] for [" << username << "]";
 
 	// if local short number, do not add international prefix
@@ -459,6 +447,7 @@ LinphoneAddress *linphone_account_normalize_sip_uri(LinphoneAccount *account, co
 
 	if (!username || *username == '\0') return NULL;
 
+#ifndef _WIN32
 	if (is_enum(username, &enum_domain)) {
 		if (enum_lookup(enum_domain, &enumres) < 0) {
 			ms_free(enum_domain);
@@ -470,6 +459,8 @@ LinphoneAddress *linphone_account_normalize_sip_uri(LinphoneAccount *account, co
 		enum_lookup_res_free(enumres);
 		return _destroy_addr_if_not_sip(uri);
 	}
+#endif
+
 	/* check if we have a "sip:" or a "sips:" */
 	if ((strstr(username, "sip:") == NULL) && (strstr(username, "sips:") == NULL)) {
 		/* this doesn't look like a true sip uri */

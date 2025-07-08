@@ -47,6 +47,7 @@ public:
 
 	const std::shared_ptr<Address> &getPeerAddress() const override;
 	const std::shared_ptr<Address> &getLocalAddress() const override;
+	std::optional<std::reference_wrapper<const std::string>> getIdentifier() const override;
 
 	time_t getCreationTime() const override;
 	time_t getLastUpdateTime() const override;
@@ -121,22 +122,22 @@ public:
 	void setState(ConferenceInterface::State newState) override;
 
 	void invalidateAccount() override;
-	const std::shared_ptr<Account> getAccount() override;
+	std::shared_ptr<Account> getAccount() override;
 
-	const std::string &getSubject() const override;
-	void setSubject(const std::string &subject) override;
 	void setUtf8Subject(const std::string &subject) override;
+	const std::string &getSubjectUtf8() const override;
 
-	const std::shared_ptr<ConferenceParams> &getCurrentParams() const override;
+	std::shared_ptr<ConferenceParams> getCurrentParams() const override;
 
 	bool isSubscriptionUnderWay() const override;
 
 	bool isMe(const std::shared_ptr<Address> &address) const override;
-	const std::shared_ptr<Participant> getMe() const override;
+	std::shared_ptr<Participant> getMe() const override;
 
-	const std::shared_ptr<Address> getConferenceAddress() const override;
-	const std::shared_ptr<Participant> findParticipant(const std::shared_ptr<Address> &address) const override;
-	const std::list<std::shared_ptr<Participant>> getParticipants() const override;
+	std::shared_ptr<Address> getConferenceAddress() const override;
+	std::shared_ptr<Participant> findParticipant(const std::shared_ptr<Address> &address) const override;
+	std::list<std::shared_ptr<Participant>> getParticipants() const override;
+	std::list<std::shared_ptr<Address>> getParticipantAddresses() const override;
 
 	virtual std::shared_ptr<Conference> getConference() const override;
 
@@ -178,9 +179,12 @@ public:
 	virtual void addPendingMessage(const std::shared_ptr<ChatMessage> &chatMessage) override;
 
 	std::shared_ptr<ChatMessage> createChatMessage(ChatMessage::Direction direction);
-	std::shared_ptr<ImdnMessage> createImdnMessage(const std::list<std::shared_ptr<ChatMessage>> &deliveredMessages,
-	                                               const std::list<std::shared_ptr<ChatMessage>> &displayedMessages);
-	std::shared_ptr<ImdnMessage> createImdnMessage(const std::list<Imdn::MessageReason> &nonDeliveredMessages);
+	std::list<std::shared_ptr<ImdnMessage>>
+	createImdnMessages(const std::list<std::shared_ptr<ChatMessage>> &deliveredMessages,
+	                   const std::list<std::shared_ptr<ChatMessage>> &displayedMessages,
+	                   bool aggregate);
+	std::list<std::shared_ptr<ImdnMessage>>
+	createImdnMessages(const std::list<Imdn::MessageReason> &nonDeliveredMessages, bool aggregate);
 	std::shared_ptr<ImdnMessage> createImdnMessage(const std::shared_ptr<ImdnMessage> &message);
 	std::shared_ptr<IsComposingMessage> createIsComposingMessage();
 
@@ -197,6 +201,7 @@ public:
 
 	LinphoneReason onSipMessageReceived(SalOp *op, const SalMessage *message) override;
 	void onChatMessageReceived(const std::shared_ptr<ChatMessage> &chatMessage) override;
+	void handleMessageRejected(const std::shared_ptr<ChatMessage> &chatMessage) override;
 	void onImdnReceived(const std::shared_ptr<ChatMessage> &chatMessage);
 	void onIsComposingReceived(const std::shared_ptr<Address> &remoteAddress, const std::string &text);
 	void onIsComposingRefreshNeeded() override;
@@ -204,9 +209,12 @@ public:
 	void onIsRemoteComposingStateChanged(const std::shared_ptr<Address> &remoteAddress, bool isComposing) override;
 
 	void realtimeTextReceived(uint32_t character, const std::shared_ptr<Call> &call) override;
+#ifdef HAVE_BAUDOT
+	void baudotCharacterReceived(char character, const std::shared_ptr<Call> &call) override;
+#endif /* HAVE_BAUDOT */
 	void setCallId(const std::string &value) override;
 
-	const std::shared_ptr<ConferenceInfo> getConferenceInfo() const override;
+	std::shared_ptr<ConferenceInfo> getConferenceInfo() const override;
 
 	Imdn *getImdnHandler() const override {
 		return mImdnHandler.get();
@@ -224,12 +232,17 @@ public:
 	std::list<std::shared_ptr<ChatMessage>> aggregatedMessages;
 
 protected:
+	Address getImdnChatRoomPeerAddress(const std::shared_ptr<ChatMessage> &message) const;
+	std::shared_ptr<AbstractChatRoom> getImdnChatRoom(const std::shared_ptr<Address> peerAddress);
 	std::shared_ptr<ChatMessage> getMessageFromSal(SalOp *op, const SalMessage *message);
 	explicit ChatRoom(const std::shared_ptr<Core> &core, const std::shared_ptr<Conference> &conf = nullptr);
 
 	std::shared_ptr<Conference> conference;
 
 private:
+	void
+	realtimeTextOrBaudotCharacterReceived(uint32_t character, const std::shared_ptr<Call> &call, bool isRealTimeText);
+
 	time_t creationTime = std::time(nullptr);
 	time_t lastUpdateTime = std::time(nullptr);
 

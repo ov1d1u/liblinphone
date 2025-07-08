@@ -81,11 +81,18 @@ public:
 	const std::list<LinphoneSrtpSuite> &getSrtpSuites() const;
 
 	void addCustomContactParameter(const std::string &paramName, const std::string &paramValue = "");
+	void removeCustomContactParameter(const std::string &paramName);
 	void clearCustomContactParameters();
 	std::string getCustomContactParameter(const std::string &paramName) const;
 
+	void addCustomContactUriParameter(const std::string &paramName, const std::string &paramValue = "");
+	void removeCustomContactUriParameter(const std::string &paramName);
+	void clearCustomContactUriParameters();
+	std::string getCustomContactUriParameter(const std::string &paramName) const;
+
 	void addCustomContent(const std::shared_ptr<Content> &content);
 	const std::list<std::shared_ptr<Content>> &getCustomContents() const;
+	void clearCustomContents();
 
 	std::shared_ptr<Account> getAccount() const;
 	void setAccount(std::shared_ptr<Account> account);

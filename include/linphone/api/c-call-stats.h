@@ -86,42 +86,42 @@ LINPHONE_PUBLIC void linphone_call_stats_set_user_data(LinphoneCallStats *stats,
 LINPHONE_PUBLIC LinphoneStreamType linphone_call_stats_get_type(const LinphoneCallStats *stats);
 
 /**
- * Get the local loss rate since last report
+ * Get the local loss rate since last report, expressed as a percentage.
  * @param stats #LinphoneCallStats object @notnil
  * @return The sender loss rate
  **/
 LINPHONE_PUBLIC float linphone_call_stats_get_sender_loss_rate(const LinphoneCallStats *stats);
 
 /**
- * Gets the remote reported loss rate since last report
+ * Gets the remote reported loss rate since last report, expressed as a percentage.
  * @param stats #LinphoneCallStats object @notnil
  * @return The receiver loss rate
  **/
 LINPHONE_PUBLIC float linphone_call_stats_get_receiver_loss_rate(const LinphoneCallStats *stats);
 
 /**
- * Get the local loss rate since last report
+ * Get the local loss rate since last report, expressed as a percentage.
  * @param stats #LinphoneCallStats object @notnil
  * @return The local loss rate
  **/
 LINPHONE_PUBLIC float linphone_call_stats_get_local_loss_rate(const LinphoneCallStats *stats);
 
 /**
- * Gets the local late rate since last report
+ * Gets the local late rate since last report, expressed as a percentage.
  * @param stats #LinphoneCallStats object @notnil
  * @return The local late rate
  **/
 LINPHONE_PUBLIC float linphone_call_stats_get_local_late_rate(const LinphoneCallStats *stats);
 
 /**
- * Gets the local interarrival jitter
+ * Gets the local interarrival jitter, expressed in seconds.
  * @param stats #LinphoneCallStats object @notnil
  * @return The interarrival jitter at last emitted sender report
  **/
 LINPHONE_PUBLIC float linphone_call_stats_get_sender_interarrival_jitter(const LinphoneCallStats *stats);
 
 /**
- * Gets the remote reported interarrival jitter
+ * Gets the remote reported interarrival jitter, expressed in seconds.
  * @param stats #LinphoneCallStats object @notnil
  * @return The interarrival jitter at last received receiver report
  **/
@@ -296,6 +296,56 @@ LINPHONE_PUBLIC LinphoneSrtpSuite linphone_call_stats_get_srtp_suite(const Linph
  * @return The #LinphoneMediaEncryption method used to exchange the SRTP keys @notnil
  */
 LINPHONE_PUBLIC LinphoneMediaEncryption linphone_call_stats_get_srtp_source(const LinphoneCallStats *stats);
+
+/**
+ * Get the number of RTP outgoing packets
+ * @param stats #LinphoneCallStats object @notnil
+ * @return The number of RTP outgoing packets
+ */
+LINPHONE_PUBLIC uint64_t linphone_call_stats_get_rtp_packet_sent(const LinphoneCallStats *stats);
+
+/**
+ * Get the number of RTP received packets
+ * @param stats #LinphoneCallStats object @notnil
+ * @return The number of RTP received packets
+ */
+LINPHONE_PUBLIC uint64_t linphone_call_stats_get_rtp_packet_recv(const LinphoneCallStats *stats);
+
+/**
+ * Get the RTP outgoing sent_bytes (excluding IP header)
+ * @param stats #LinphoneCallStats object @notnil
+ * @return The number of outgoing sent_bytes (excluding IP header)
+ */
+LINPHONE_PUBLIC uint64_t linphone_call_stats_get_rtp_sent(const LinphoneCallStats *stats);
+
+/**
+ * Get the RTP incoming recv_bytes of payload and delivered in time to the application
+ * @param stats #LinphoneCallStats object @notnil
+ * @return The number of recv_bytes of payload and delivered in time to the application
+ */
+LINPHONE_PUBLIC uint64_t linphone_call_stats_get_rtp_recv(const LinphoneCallStats *stats);
+
+/**
+ * Get the number of received bytes excluding IPv4/IPv6/UDP headers and including late and duplicate packets
+ * @param stats #LinphoneCallStats object @notnil
+ * @return the number of received bytes excluding IPv4/IPv6/UDP headers and including late and duplicate packets
+ */
+LINPHONE_PUBLIC uint64_t linphone_call_stats_get_rtp_hw_recv(const LinphoneCallStats *stats);
+
+/**
+ * Get the RTP cumulative number of incoming packet lost
+ * @param stats #LinphoneCallStats object @notnil
+ * @return The number of RTP cumulative number of incoming packet lost
+ */
+LINPHONE_PUBLIC int64_t linphone_call_stats_get_rtp_cum_packet_loss(const LinphoneCallStats *stats);
+
+/**
+ * Get the RTP incoming packets discarded because the queue exceeds its max size
+ * @param stats #LinphoneCallStats object @notnil
+ * @return The RTP incoming packets discarded because the queue exceeds its max size
+ */
+LINPHONE_PUBLIC uint64_t linphone_call_stats_get_rtp_discarded(const LinphoneCallStats *stats);
+
 
 /**
  * @}

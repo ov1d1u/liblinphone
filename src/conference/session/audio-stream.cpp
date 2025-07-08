@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010-2022 Belledonne Communications SARL.
+ * Copyright (c) 2010-2025 Belledonne Communications SARL.
  *
  * This file is part of Liblinphone
  * (see https://gitlab.linphone.org/BC/public/liblinphone).
@@ -116,9 +116,6 @@ void MS2AudioStream::initZrtp() {
 	zrtpParams.peerUri = peerUri;
 	zrtpParams.selfUri = selfUri;
 	zrtpParams.acceptGoClear = !!linphone_core_zrtp_go_clear_enabled(getCCore());
-	/* Get key lifespan from config file, default is 0:forever valid */
-	zrtpParams.limeKeyTimeSpan = bctbx_time_string_to_sec(
-	    linphone_config_get_string(linphone_core_get_config(getCCore()), "sip", "lime_key_validity", "0"));
 	setZrtpCryptoTypesParameters(&zrtpParams, mIsOfferer);
 	audio_stream_enable_zrtp(mStream, &zrtpParams);
 	if (peerUri) bctbx_free(peerUri);
@@ -387,7 +384,7 @@ void MS2AudioStream::render(const OfferAnswerContext &params, CallSession::State
 				lInfo() << "MS2Audiostream::render End2End encrypted local conference";
 				setEktMode(MS_EKT_TRANSFER);
 			} else {
-				lInfo() << "MS2Audiostram::render End2End encrypted remote conference";
+				lInfo() << "MS2Audiostram::render End2End encrypted client conference";
 				setEktMode(MS_EKT_ENABLED);
 			}
 		}
@@ -444,9 +441,10 @@ void MS2AudioStream::render(const OfferAnswerContext &params, CallSession::State
 		    pt ? PayloadType::create(getCore().getSharedFromThis(), pt) : nullptr);
 	}
 
-	if (stream.getDirection() == SalStreamSendOnly) media_stream_set_direction(&mStream->ms, MediaStreamSendOnly);
-	else if (stream.getDirection() == SalStreamRecvOnly) media_stream_set_direction(&mStream->ms, MediaStreamRecvOnly);
-	else if (stream.getDirection() == SalStreamSendRecv) media_stream_set_direction(&mStream->ms, MediaStreamSendRecv);
+	auto streamDirection = stream.getDirection();
+	if (streamDirection == SalStreamSendOnly) media_stream_set_direction(&mStream->ms, MediaStreamSendOnly);
+	else if (streamDirection == SalStreamRecvOnly) media_stream_set_direction(&mStream->ms, MediaStreamRecvOnly);
+	else if (streamDirection == SalStreamSendRecv) media_stream_set_direction(&mStream->ms, MediaStreamSendRecv);
 
 	// If stream doesn't have a playcard associated with it, then use the default values
 	if (!playcard)
@@ -468,6 +466,7 @@ void MS2AudioStream::render(const OfferAnswerContext &params, CallSession::State
 	if (!captcard) lWarning() << "No card defined for capture!";
 	string playfile = L_C_TO_STRING(getCCore()->play_file);
 	string recfile = L_C_TO_STRING(getCCore()->rec_file);
+	string onHoldMusicFile = L_C_TO_STRING(getCCore()->on_hold_music_file);
 	/* Don't use file or soundcard capture when placed in recv-only mode */
 	if ((stream.rtp_port == 0) || (stream.getDirection() == SalStreamRecvOnly) ||
 	    (stream.multicast_role == SalMulticastReceiver)) {
@@ -495,7 +494,8 @@ void MS2AudioStream::render(const OfferAnswerContext &params, CallSession::State
 	bool useRtpIo = !!linphone_config_get_int(linphone_core_get_config(getCCore()), "sound", "rtp_io", false);
 	bool useRtpIoEnableLocalOutput =
 	    !!linphone_config_get_int(linphone_core_get_config(getCCore()), "sound", "rtp_io_enable_local_output", false);
-	if (getCCore()->use_files || (useRtpIo && !useRtpIoEnableLocalOutput)) {
+	bool useFiles = getCCore()->use_files;
+	if (useFiles || (useRtpIo && !useRtpIoEnableLocalOutput)) {
 		captcard = playcard = nullptr;
 	}
 	if (audioMixer) {
@@ -506,7 +506,7 @@ void MS2AudioStream::render(const OfferAnswerContext &params, CallSession::State
 		lInfo() << "Sound resources are used by another CallSession, not using soundcard";
 		captcard = playcard = nullptr;
 		if (targetState == CallSession::State::OutgoingEarlyMedia) {
-			// Restart will be required upon transitionning to StreamsRunning state to take into account that sound
+			// Restart will be required upon transitioning to StreamsRunning state to take into account that sound
 			// resources may have been released meanwhile.
 			mRestartStreamRequired = true;
 			lInfo() << "Soundcard usage will be checked again when moving to StreamsRunning.";
@@ -545,7 +545,7 @@ void MS2AudioStream::render(const OfferAnswerContext &params, CallSession::State
 				io.output.soundcard = playcard;
 			} else {
 				io.output.type = MSResourceFile;
-				io.output.file = recfile.empty() ? nullptr : recfile.c_str();
+				io.output.file = recfile.empty() || !useFiles ? nullptr : recfile.c_str();
 			}
 		} else {
 			io.input.type = io.output.type = MSResourceRtp;
@@ -558,7 +558,7 @@ void MS2AudioStream::render(const OfferAnswerContext &params, CallSession::State
 			io.output.soundcard = playcard;
 		} else {
 			io.output.type = MSResourceFile;
-			io.output.file = recfile.empty() ? nullptr : recfile.c_str();
+			io.output.file = recfile.empty() || !useFiles ? nullptr : recfile.c_str();
 		}
 		if (captcard) {
 			io.input.type = MSResourceSoundcard;
@@ -567,9 +567,9 @@ void MS2AudioStream::render(const OfferAnswerContext &params, CallSession::State
 			io.input.type = MSResourceFile;
 
 			// We need to use onHoldFile when paused
-			onHoldFile = pause ? playfile : "";
+			onHoldFile = pause ? onHoldMusicFile : "";
 			io.input.file =
-			    pause
+			    pause || !useFiles
 			        ? nullptr
 			        : playfile.c_str(); /* We prefer to use the remote_play api, that allows to play multimedia files */
 		}
@@ -604,7 +604,6 @@ void MS2AudioStream::render(const OfferAnswerContext &params, CallSession::State
 		audio_stream_set_is_speaking_callback(mStream, &MS2AudioStream::sAudioStreamIsSpeakingCb, this);
 		audio_stream_set_is_muted_callback(mStream, &MS2AudioStream::sAudioStreamIsMutedCb, this);
 
-		conference = getCore().findConference(getMediaSession().getSharedFromThis(), false);
 		if (conference) {
 			audio_stream_set_active_speaker_callback(mStream, &MS2AudioStream::sAudioStreamActiveSpeakerCb, this);
 
@@ -622,6 +621,12 @@ void MS2AudioStream::render(const OfferAnswerContext &params, CallSession::State
 		if (vs) audio_stream_link_video(mStream, vs);
 		if (err == 0) postConfigureAudioStream((mMuted || mMicMuted) && !getMediaSession().isPlayingRingbackTone());
 		mInternalStats.number_of_starts++;
+
+#ifdef HAVE_BAUDOT
+		if (mStream->baudot_detector) {
+			ms_filter_add_notify_callback(mStream->baudot_detector, sBaudotDetectorEventNotified, this, false);
+		}
+#endif /* HAVE_BAUDOT */
 	}
 
 	if ((targetState == CallSession::State::Paused) && !captcard && !playfile.empty()) {
@@ -631,7 +636,6 @@ void MS2AudioStream::render(const OfferAnswerContext &params, CallSession::State
 	if (getMediaSession().isPlayingRingbackTone()) setupRingbackPlayer();
 
 	std::shared_ptr<ParticipantDevice> device = nullptr;
-	conference = getCore().findConference(getMediaSession().getSharedFromThis(), false);
 	if (conference) {
 		device = conference->findParticipantDevice(getMediaSession().getSharedFromThis());
 	}
@@ -1115,6 +1119,86 @@ MS2AudioMixer *MS2AudioStream::getAudioMixer() {
 	}
 	return nullptr;
 }
+
+static MSBaudotMode linphone_call_baudot_standard_to_ms_baudot_mode(LinphoneBaudotStandard standard) {
+	MSBaudotMode mode = MSBaudotModeTty45;
+	switch (standard) {
+		case LinphoneBaudotStandardUs:
+			mode = MSBaudotModeTty45;
+			break;
+		case LinphoneBaudotStandardEurope:
+			mode = MSBaudotModeTty50;
+			break;
+	}
+	return mode;
+}
+
+void MS2AudioStream::enableBaudotDetection(bool enabled) {
+	if (mStream) audio_stream_enable_baudot_detection(mStream, enabled ? TRUE : FALSE);
+}
+
+void MS2AudioStream::setBaudotMode(LinphoneBaudotMode mode) {
+	mBaudotMode = mode;
+	applyBaudotModeAndStandard();
+}
+
+void MS2AudioStream::setBaudotSendingStandard(LinphoneBaudotStandard standard) {
+	mBaudotSendingStandard = standard;
+	applyBaudotModeAndStandard();
+}
+
+void MS2AudioStream::setBaudotPauseTimeout(uint8_t seconds) {
+	if (mStream) audio_stream_set_baudot_pause_timeout(mStream, seconds);
+}
+
+void MS2AudioStream::applyBaudotModeAndStandard() const {
+	if (mStream) {
+		switch (mBaudotMode) {
+			case LinphoneBaudotModeVoice:
+				audio_stream_enable_baudot_decoding(mStream, FALSE);
+				audio_stream_set_baudot_sending_mode(mStream, MSBaudotModeVoice);
+				break;
+			case LinphoneBaudotModeTty:
+				audio_stream_enable_baudot_decoding(mStream, TRUE);
+				audio_stream_set_baudot_sending_mode(
+				    mStream, linphone_call_baudot_standard_to_ms_baudot_mode(mBaudotSendingStandard));
+				break;
+			case LinphoneBaudotModeHearingCarryOver:
+				audio_stream_enable_baudot_decoding(mStream, FALSE);
+				audio_stream_set_baudot_sending_mode(
+				    mStream, linphone_call_baudot_standard_to_ms_baudot_mode(mBaudotSendingStandard));
+				break;
+			case LinphoneBaudotModeVoiceCarryOver:
+				audio_stream_enable_baudot_decoding(mStream, TRUE);
+				audio_stream_set_baudot_sending_mode(mStream, MSBaudotModeVoice);
+				break;
+		}
+	}
+}
+
+void MS2AudioStream::sendBaudotCharacter(char character) {
+	audio_stream_send_baudot_character(mStream, character);
+}
+
+#ifdef HAVE_BAUDOT
+void MS2AudioStream::baudotDetectorEventNotified(BCTBX_UNUSED(MSFilter *f), unsigned int id, void *arg) {
+	if (id == MS_BAUDOT_DETECTOR_STATE_EVENT) {
+		MSBaudotDetectorState state = *reinterpret_cast<MSBaudotDetectorState *>(arg);
+		ms_message("Baudot detector state change notified: %s",
+		           state == MSBaudotDetectorStateTty45 ? "TTY45" : "TTY50");
+		getMediaSession().notifyBaudotDetected((state == MSBaudotDetectorStateTty50) ? MSBaudotStandardEurope
+		                                                                             : MSBaudotStandardUs);
+	} else if (id == MS_BAUDOT_DETECTOR_CHARACTER_EVENT) {
+		char receivedCharacter = *reinterpret_cast<char *>(arg);
+		getMediaSession().notifyBaudotCharacterReceived(receivedCharacter);
+	}
+}
+
+void MS2AudioStream::sBaudotDetectorEventNotified(void *userData, MSFilter *f, unsigned int id, void *arg) {
+	MS2AudioStream *zis = static_cast<MS2AudioStream *>(userData);
+	zis->baudotDetectorEventNotified(f, id, arg);
+}
+#endif /* HAVE_BAUDOT */
 
 std::string MS2AudioStream::getLabel() const {
 	return std::string();

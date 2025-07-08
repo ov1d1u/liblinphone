@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010-2022 Belledonne Communications SARL.
+ * Copyright (c) 2010-2024 Belledonne Communications SARL.
  *
  * This file is part of Liblinphone
  * (see https://gitlab.linphone.org/BC/public/liblinphone).
@@ -620,6 +620,7 @@ ChatMessageModifier::Result FileTransferChatMessageModifier::decode(const shared
 		fileTransferContent->setBody(internalContent.getBody());
 		string xml_body = fileTransferContent->getBodyAsUtf8String();
 		parseFileTransferXmlIntoContent(xml_body.c_str(), fileTransferContent);
+		fileTransferContent->setRelatedChatMessageId(message->getImdnMessageId());
 		message->addContent(fileTransferContent);
 		return ChatMessageModifier::Result::Done;
 	}
@@ -629,6 +630,7 @@ ChatMessageModifier::Result FileTransferChatMessageModifier::decode(const shared
 			auto fileTransferContent = static_pointer_cast<FileTransferContent>(content);
 			string xml_body = fileTransferContent->getBodyAsUtf8String();
 			parseFileTransferXmlIntoContent(xml_body.c_str(), fileTransferContent);
+			fileTransferContent->setRelatedChatMessageId(message->getImdnMessageId());
 		}
 	}
 	return ChatMessageModifier::Result::Done;
@@ -693,7 +695,7 @@ void FileTransferChatMessageModifier::onRecvBody(BCTBX_UNUSED(belle_sip_user_bod
 			linphone_buffer_unref(lb);
 		}
 	} else {
-		lWarning() << "File transfer decrypt failed with code -" << hex << (int)(-retval);
+		lWarning() << "File transfer body download failed with code -" << hex << (int)(-retval);
 		const auto &meAddress = message->getMeAddress();
 		if (meAddress) {
 			message->getPrivate()->setParticipantState(meAddress, ChatMessage::State::FileTransferError,
@@ -752,6 +754,12 @@ void FileTransferChatMessageModifier::onRecvEnd(BCTBX_UNUSED(belle_sip_user_body
 		retval = imee->downloadingFile(message, 0, nullptr, 0, nullptr, currentFileTransferContent);
 	}
 	if (retval == 0 || retval == -1) {
+		if (currentFileContentToTransfer->getFileSize() == 0) {
+			/* case of chunked download, the content-length was not known. Set it now it is done. */
+			size_t sz = belle_sip_body_handler_get_transfered_size(BELLE_SIP_BODY_HANDLER(bh));
+			lInfo() << "Total size downloaded in chuncked mode: " << sz << " bytes.";
+			currentFileContentToTransfer->setFileSize(sz);
+		}
 		LinphoneChatMessage *msg = L_GET_C_BACK_PTR(message);
 		if (currentFileContentToTransfer->getFilePath().empty()) {
 			LinphoneChatMessageCbs *cbs = linphone_chat_message_get_callbacks(msg);
@@ -808,7 +816,7 @@ void FileTransferChatMessageModifier::onRecvEnd(BCTBX_UNUSED(belle_sip_user_body
 			message->downloadTerminated();
 		}
 	} else {
-		lWarning() << "File transfer decrypt failed with code " << (int)retval;
+		lWarning() << "File transfer chunck download failed with code " << (int)retval;
 		if (meAddress) {
 			message->getPrivate()->setParticipantState(meAddress, ChatMessage::State::FileTransferError,
 			                                           ::ms_time(nullptr));
@@ -853,15 +861,9 @@ void FileTransferChatMessageModifier::processResponseHeadersFromGetFile(const be
 		shared_ptr<ChatMessage> message = chatMessage.lock();
 		if (!message) return;
 
-		if (code >= 400 && code < 500) {
-			lWarning() << "File transfer failed with code " << code;
-			const auto &meAddress = message->getMeAddress();
-			if (meAddress) {
-				message->getPrivate()->setParticipantState(meAddress, ChatMessage::State::FileTransferDone,
-				                                           ::ms_time(nullptr));
-			}
-			releaseHttpRequest();
-			currentFileTransferContent = nullptr;
+		if (code >= 400) {
+			lWarning() << "[Response Header] File transfer failed with code " << code;
+			onDownloadFailed();
 			return;
 		}
 
@@ -872,12 +874,16 @@ void FileTransferChatMessageModifier::processResponseHeadersFromGetFile(const be
 		if (currentFileContentToTransfer) {
 			belle_sip_header_content_length_t *content_length_hdr =
 			    BELLE_SIP_HEADER_CONTENT_LENGTH(belle_sip_message_get_header(response, "Content-Length"));
-			currentFileContentToTransfer->setFileSize(
-			    belle_sip_header_content_length_get_content_length(content_length_hdr));
-			lInfo() << "Extracted content length " << currentFileContentToTransfer->getFileSize() << " from header";
+			if (content_length_hdr) {
+				currentFileContentToTransfer->setFileSize(
+				    belle_sip_header_content_length_get_content_length(content_length_hdr));
+				lInfo() << "Extracted content length " << currentFileContentToTransfer->getFileSize() << " from header";
+			}
+
 		} else {
 			lWarning() << "No file transfer information for message [" << message << "]: creating...";
 			auto content = createFileTransferInformationFromHeaders(response);
+			content->setRelatedChatMessageId(message->getImdnMessageId());
 			message->addContent(content);
 		}
 
@@ -920,6 +926,7 @@ void FileTransferChatMessageModifier::onDownloadFailed() {
 		lError() << "Auto download failed for message [" << message << "]";
 		message->getPrivate()->doNotRetryAutoDownload();
 		releaseHttpRequest();
+		message->getPrivate()->setAutoFileTransferDownloadInProgress(false);
 		message->getPrivate()->handleAutoDownload();
 	} else {
 		const auto &meAddress = message->getMeAddress();
@@ -973,8 +980,8 @@ void FileTransferChatMessageModifier::processResponseFromGetFile(const belle_htt
 		if (!message) return;
 
 		int code = belle_http_response_get_status_code(event->response);
-		if (code >= 400 && code < 500) {
-			lWarning() << "File transfer failed with code " << code;
+		if (code >= 400) {
+			lWarning() << "[Response] File transfer failed with code " << code;
 			onDownloadFailed();
 		} else if (code != 200) {
 			lWarning() << "Unhandled HTTP code response " << code << " for file transfer";
@@ -990,6 +997,7 @@ static void createFileContentFromFileTransferContent(std::shared_ptr<FileTransfe
 	fileContent->setFilePath(fileTransferContent->getFilePath());
 	fileContent->setContentType(fileTransferContent->getFileContentType());
 	fileContent->setFileDuration(fileTransferContent->getFileDuration());
+	fileContent->setRelatedChatMessageId(fileTransferContent->getRelatedChatMessageId());
 
 	// Link the FileContent to the FileTransferContent
 	fileTransferContent->setFileContent(fileContent);
@@ -1103,6 +1111,15 @@ void FileTransferChatMessageModifier::cancelFileTransfer() {
 			EncryptionEngine *imee = message->getCore()->getEncryptionEngine();
 			if (imee) {
 				imee->cancelFileTransfer(currentFileTransferContent);
+			}
+			if (message) {
+				const auto &meAddress = message->getMeAddress();
+				if (meAddress) {
+					auto nextState = (message->getDirection() == ChatMessage::Direction::Outgoing)
+					                     ? ChatMessage::State::NotDelivered
+					                     : ChatMessage::State::FileTransferError;
+					message->getPrivate()->setParticipantState(meAddress, nextState, ::ms_time(nullptr));
+				}
 			}
 		} else {
 			lWarning() << "Found a http request for file transfer but no Content";

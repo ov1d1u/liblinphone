@@ -63,6 +63,23 @@ LINPHONE_PUBLIC void *linphone_conference_cbs_get_user_data(const LinphoneConfer
 LINPHONE_PUBLIC void linphone_conference_cbs_set_user_data(LinphoneConferenceCbs *cbs, void *ud);
 
 /**
+ * Get the allowed participant list changed callback.
+ * @param[in] cbs #LinphoneConferenceCbs object.
+ * @return The current allowed participant list changed callback.
+ */
+LINPHONE_PUBLIC LinphoneConferenceCbsAllowedParticipantListChangedCb
+linphone_conference_cbs_get_allowed_participant_list_changed(const LinphoneConferenceCbs *cbs);
+
+/**
+ * Set the allowed participant list changed callback.
+ * @param[in] cbs #LinphoneConferenceCbs object.
+ * @param[in] cb The allowed participant list changed callback to be used.
+ */
+LINPHONE_PUBLIC void
+linphone_conference_cbs_set_allowed_participant_list_changed(LinphoneConferenceCbs *cbs,
+                                                             LinphoneConferenceCbsAllowedParticipantListChangedCb cb);
+
+/**
  * Get the participant added callback.
  * @param[in] cbs #LinphoneConferenceCbs object.
  * @return The current participant added callback.
@@ -127,6 +144,22 @@ linphone_conference_cbs_get_participant_device_removed(const LinphoneConferenceC
 LINPHONE_PUBLIC void
 linphone_conference_cbs_set_participant_device_removed(LinphoneConferenceCbs *cbs,
                                                        LinphoneConferenceCbsParticipantDeviceRemovedCb cb);
+
+/**
+ * Get the participant device joining request callback.
+ * @param[in] cbs #LinphoneConferenceCbs object.
+ * @return The current participant device joining request callback.
+ */
+LINPHONE_PUBLIC LinphoneConferenceCbsParticipantDeviceJoiningRequestCb
+linphone_conference_cbs_get_participant_device_joining_request(const LinphoneConferenceCbs *cbs);
+
+/**
+ * Set the participant device joining request callback.
+ * @param[in] cbs #LinphoneConferenceCbs object.
+ * @param[in] cb The participant device joining request callback to be used.
+ */
+LINPHONE_PUBLIC void linphone_conference_cbs_set_participant_device_joining_request(
+    LinphoneConferenceCbs *cbs, LinphoneConferenceCbsParticipantDeviceJoiningRequestCb cb);
 
 /**
  * Get the participant role changed callback.

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010-2023 Belledonne Communications SARL.
+ * Copyright (c) 2010-2025 Belledonne Communications SARL.
  *
  * This file is part of Liblinphone
  * (see https://gitlab.linphone.org/BC/public/liblinphone).
@@ -54,6 +54,8 @@
 #include "chat/encryption/lime-x3dh-encryption-engine.h"
 #endif // HAVE_LIME_X3DH
 #include "chat/encryption/lime-x3dh-server-engine.h"
+#include "conference/conference-context.h"
+#include "conference/conference-id-params.h"
 #include "conference/conference.h"
 #include "conference/handlers/client-conference-list-event-handler.h"
 #include "conference/handlers/server-conference-list-event-handler.h"
@@ -80,6 +82,8 @@
 #include "logger/logger.h"
 #include "paths/paths.h"
 #include "sal/sal_media_description.h"
+#include "search/remote-contact-directory.h"
+#include "vcard/carddav-params.h"
 
 #ifdef HAVE_ADVANCED_IM
 #include "xml/ekt-linphone-extension.h"
@@ -151,7 +155,8 @@ void CorePrivate::init() {
 		}
 	}
 
-	if (linphone_factory_is_database_storage_available(linphone_factory_get())) {
+	if (linphone_factory_is_database_storage_available(linphone_factory_get()) &&
+	    !!linphone_core_database_enabled(lc)) {
 		AbstractDb::Backend backend;
 		string uri = L_C_TO_STRING(linphone_config_get_string(linphone_core_get_config(lc), "storage", "uri", nullptr));
 		if (!uri.empty())
@@ -164,7 +169,7 @@ void CorePrivate::init() {
 			}
 		else {
 			backend = AbstractDb::Sqlite3;
-			string dbPath = Utils::quoteStringIfNotAlready(q->getDataPath() + LINPHONE_DB);
+			string dbPath = Utils::quoteStringIfNotAlready(q->getDataPath() + "/" + LINPHONE_DB);
 			lInfo() << "Using [" << dbPath << "] as default database path";
 			uri = dbPath;
 		}
@@ -200,7 +205,7 @@ void CorePrivate::init() {
 		// Leave this part to import the legacy call logs to MainDB
 		string calHistoryDbPath = L_C_TO_STRING(
 		    linphone_config_get_string(linphone_core_get_config(lc), "storage", "call_logs_db_uri", nullptr));
-		if (calHistoryDbPath.empty()) calHistoryDbPath = q->getDataPath() + LINPHONE_CALL_HISTORY_DB;
+		if (calHistoryDbPath.empty()) calHistoryDbPath = q->getDataPath() + "/" + LINPHONE_CALL_HISTORY_DB;
 		if (calHistoryDbPath != "null") {
 			lInfo() << "Using [" << calHistoryDbPath << "] as legacy call history database path";
 			linphone_core_set_call_logs_database_path(lc, calHistoryDbPath.c_str());
@@ -209,7 +214,7 @@ void CorePrivate::init() {
 		if (lc->zrtp_secrets_cache == NULL) {
 			string zrtpSecretsDbPath = L_C_TO_STRING(
 			    linphone_config_get_string(linphone_core_get_config(lc), "storage", "zrtp_secrets_db_uri", nullptr));
-			if (zrtpSecretsDbPath.empty()) zrtpSecretsDbPath = q->getDataPath() + LINPHONE_ZRTP_SECRETS_DB;
+			if (zrtpSecretsDbPath.empty()) zrtpSecretsDbPath = q->getDataPath() + "/" + LINPHONE_ZRTP_SECRETS_DB;
 			if (zrtpSecretsDbPath != "null") {
 				lInfo() << "Using [" << zrtpSecretsDbPath << "] as default zrtp secrets database path";
 				linphone_core_set_zrtp_secrets_file(lc, zrtpSecretsDbPath.c_str());
@@ -220,12 +225,14 @@ void CorePrivate::init() {
 		if (!lc->friends_db_file) {
 			string friendsDbPath = L_C_TO_STRING(
 			    linphone_config_get_string(linphone_core_get_config(lc), "storage", "friends_db_uri", nullptr));
-			if (friendsDbPath.empty()) friendsDbPath = q->getDataPath() + LINPHONE_FRIENDS_DB;
+			if (friendsDbPath.empty()) friendsDbPath = q->getDataPath() + "/" + LINPHONE_FRIENDS_DB;
 			if (friendsDbPath != "null") {
 				lInfo() << "Using [" << friendsDbPath << "] as legacy friends database path";
 				linphone_core_set_friends_database_path(lc, friendsDbPath.c_str());
 			} else lWarning() << "Friends database explicitely not requested";
 		}
+	} else {
+		lInfo() << "The Core was explicitely requested not to use any database";
 	}
 
 	createConferenceCleanupTimer();
@@ -243,6 +250,10 @@ bool CorePrivate::listenerAlreadyRegistered(CoreListener *listener) const {
 }
 
 void CorePrivate::registerListener(CoreListener *listener) {
+	if (!listener) {
+		lError() << __func__ << " : Ignoring attempt to register a null listener";
+		return;
+	}
 	if (listenerAlreadyRegistered(listener)) return;
 	listeners.push_back(listener);
 }
@@ -334,19 +345,32 @@ bool CorePrivate::isShutdownDone() {
 	return true;
 }
 
+void CorePrivate::deleteConferenceInfo(const std::shared_ptr<Address> &conferenceAddress) {
+#ifdef HAVE_DB_STORAGE
+	mainDb->deleteConferenceInfo(conferenceAddress);
+#endif // HAVE_DB_STORAGE
+	auto chatRoom = searchChatRoom(nullptr, nullptr, conferenceAddress, {});
+	if (chatRoom) {
+		chatRoom->deleteFromDb();
+	}
+}
+
 void CorePrivate::createConferenceCleanupTimer() {
 	L_Q();
 
 	const auto period = q->getConferenceCleanupPeriod();
 	if (period > 0) {
 		auto onConferenceCleanup = [this]() -> bool {
-			auto it = conferenceById.begin();
-			while (it != conferenceById.end()) {
+			auto it = mConferenceById.begin();
+			while (it != mConferenceById.end()) {
 				auto [id, conference] = (*it);
 				it++;
-				const auto conferenceIsEnded = conference->isConferenceEnded();
+				const auto conferenceIsExpired = conference->isConferenceExpired();
 				const auto conferenceHasNoParticipantDevices = (conference->getParticipantDevices(false).size() == 0);
-				if (conferenceIsEnded && conferenceHasNoParticipantDevices) {
+				if (conferenceIsExpired && conferenceHasNoParticipantDevices) {
+					lInfo() << "Automatically terminating " << *conference
+					        << " because it is ended and no devices are left";
+					const auto conferenceAddress = conference->getConferenceAddress();
 					conference->terminate();
 				}
 			};
@@ -422,7 +446,8 @@ void CorePrivate::unregisterAccounts() {
 
 			/* Do not unregister when push notifications are allowed, otherwise this clears tokens from the SIP
 			 * server.*/
-			if (!params->getPushNotificationAllowed() && !params->getRemotePushNotificationAllowed()) {
+			if (params->getUnregisterAtStop() && !params->getPushNotificationAllowed() &&
+			    !params->getRemotePushNotificationAllowed()) {
 				account->unregister(); /* to unregister without changing the stored flag enable_register */
 			}
 		}
@@ -464,26 +489,22 @@ void CorePrivate::uninit() {
 		}
 	}
 
-	chatRoomsById.clear();
+	mChatRoomsById.clear();
 
-	// https://gcc.gnu.org/bugzilla/show_bug.cgi?format=multiple&id=81767
-#if __GNUC__ == 7
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wunused-variable"
-#endif //  __GNUC__ == 7
-	for (const auto &[id, conference] : conferenceById) {
-#if __GNUC__ == 7
-#pragma GCC diagnostic pop
-#endif //  __GNUC__ == 7
-       // Terminate audio video conferences just before core is stopped
+	for (const auto &[id, conference] : mConferenceById) {
+		// Terminate audio video conferences just before core is stopped
+		lInfo() << "Terminating conference " << *conference << " with id " << id
+		        << " because the core is shutting down";
 		conference->terminate();
 	}
-	conferenceById.clear();
+	mConferenceById.clear();
+	q->mConferencesPendingCreation.clear();
+	q->mSipConferenceSchedulers.clear();
 
 	listeners.clear();
 	static_cast<PlatformHelpers *>(getCCore()->platform_helper)->stopPushService();
 	pushReceivedBackgroundTask.stop();
-	mLdapServers.clear();
+	mRemoteContactDirectories.clear();
 
 	q->mPublishByEtag.clear();
 
@@ -670,7 +691,7 @@ bool CorePrivate::setInputAudioDevice(const shared_ptr<AudioDevice> &audioDevice
 		}
 	}
 
-	for (const auto &[id, conference] : conferenceById) {
+	for (const auto &[id, conference] : mConferenceById) {
 		auto audioControlInterface = conference->getAudioControlInterface();
 		if (audioControlInterface) {
 			audioControlInterface->setInputDevice(audioDevice);
@@ -694,7 +715,7 @@ bool CorePrivate::setOutputAudioDevice(const shared_ptr<AudioDevice> &audioDevic
 		}
 	}
 
-	for (const auto &[id, conference] : conferenceById) {
+	for (const auto &[id, conference] : mConferenceById) {
 		auto audioControlInterface = conference->getAudioControlInterface();
 		if (audioControlInterface) {
 			audioControlInterface->setOutputDevice(audioDevice);
@@ -714,7 +735,7 @@ void CorePrivate::updateVideoDevice() {
 			auto vs = i->getVideoStream();
 			if (vs && video_stream_local_screen_sharing_enabled(vs)) {
 				auto &group = ms->getStreamsGroup();
-				int idx = ms->getLocalThumbnailStreamIdx();
+				int idx = ms->getThumbnailStreamIdx();
 				if (idx >= 0) i = dynamic_cast<MS2VideoControl *>(group.getStream(idx));
 			}
 			if (i) i->parametersChanged();
@@ -938,7 +959,6 @@ void Core::enableLimeX3dh(bool enable) {
 			}
 			string dbAccess = getX3dhDbPath();
 			lInfo() << "Using [" << dbAccess << "] as lime database path";
-			belle_http_provider_t *prov = linphone_core_get_http_provider(getCCore());
 			/* Both Lime and MainDb use soci as database engine.
 			 * However, the initialisation of backends must be done manually on platforms where soci is statically
 			 * linked. Lime does not do it. Doing it twice is risky - soci unloads the previously loaded backend. A
@@ -946,11 +966,15 @@ void Core::enableLimeX3dh(bool enable) {
 			 * AbstractChatRoom::registerBackend() will do the job only once.
 			 */
 			AbstractDb::registerBackend(AbstractDb::Sqlite3);
-			LimeX3dhEncryptionEngine *engine = new LimeX3dhEncryptionEngine(dbAccess, prov, getSharedFromThis());
-			setEncryptionEngine(engine);
-			d->registerListener(engine);
-			if (!hasSpec(Core::limeSpec)) {
-				addSpec(Core::limeSpec);
+			LimeX3dhEncryptionEngine *engine = new LimeX3dhEncryptionEngine(dbAccess, getSharedFromThis());
+			if (engine->getEngineType() == EncryptionEngine::EngineType::LimeX3dh) {
+				setEncryptionEngine(engine);
+				d->registerListener(engine);
+				if (!hasSpec(Core::limeSpec)) {
+					addSpec(Core::limeSpec);
+				}
+			} else { // LimeX3DHEncryptionEngine creation failed
+				delete engine;
 			}
 #else
 			lWarning() << "Lime X3DH support is not available";
@@ -972,7 +996,7 @@ std::string Core::getX3dhDbPath() const {
 	// If no path is configured (i.e., the returned string is empty),
 	// set the database path to the default location within the data directory.
 	if (dbAccess.empty()) {
-		dbAccess = getDataPath() + "x3dh.c25519.sqlite3";
+		dbAccess = getDataPath() + "/x3dh.c25519.sqlite3";
 	} // If a path is configured, check if it is set to store the database in memory.
 	  // The database will be stored in memory if the path is ":memory:".
 	else if (dbAccess != ":memory:") {
@@ -1597,7 +1621,10 @@ void Core::healNetworkConnections() {
 
 int Core::getUnreadChatMessageCount() const {
 	L_D();
-	return d->mainDb->getUnreadChatMessageCount();
+	if (d->mainDb && d->mainDb->isInitialized()) {
+		return d->mainDb->getUnreadChatMessageCount();
+	}
+	return -1;
 }
 
 int Core::getUnreadChatMessageCount(const std::shared_ptr<const Address> &localAddress) const {
@@ -1661,7 +1688,7 @@ std::shared_ptr<ChatMessage> Core::findChatMessageFromCallId(const std::string &
 }
 
 void Core::handleIncomingMessageWaitingIndication(std::shared_ptr<Event> event, const Content *content) {
-	shared_ptr<Address> accountAddr = nullptr;
+	shared_ptr<const Address> accountAddr = nullptr;
 
 	if (!content) {
 		lWarning() << "MWI NOTIFY without body, doing nothing";
@@ -1693,57 +1720,68 @@ void Core::handleIncomingMessageWaitingIndication(std::shared_ptr<Event> event, 
 }
 
 // -----------------------------------------------------------------------------
-// Ldap.
+// Remote Contact Directories.
 // -----------------------------------------------------------------------------
 
-const std::list<std::shared_ptr<Ldap>> &Core::getLdapList() {
-	return getPrivate()->mLdapServers;
+const list<shared_ptr<RemoteContactDirectory>> &Core::getRemoteContactDirectories() {
+	return getPrivate()->mRemoteContactDirectories;
 }
 
-std::list<std::shared_ptr<Ldap>>::iterator Core::getLdapIterator(int index) {
-	return std::find_if(getPrivate()->mLdapServers.begin(), getPrivate()->mLdapServers.end(),
-	                    [index](std::shared_ptr<Ldap> a) { return a->getIndex() == index; });
+void Core::addRemoteContactDirectory(shared_ptr<RemoteContactDirectory> remoteContactDirectory) {
+	remoteContactDirectory->writeToConfigFile();
+	getPrivate()->mRemoteContactDirectories.push_back(remoteContactDirectory);
 }
 
-void CorePrivate::reloadLdapList() {
-	std::list<std::shared_ptr<Ldap>> ldapList;
+void Core::removeRemoteContactDirectory(shared_ptr<RemoteContactDirectory> remoteContactDirectory) {
+	remoteContactDirectory->removeFromConfigFile();
+	getPrivate()->mRemoteContactDirectories.remove(remoteContactDirectory);
+}
+
+void CorePrivate::reloadRemoteContactDirectories() {
+	auto core = getPublic()->getSharedFromThis();
 	auto lpConfig = linphone_core_get_config(getCCore());
 	bctbx_list_t *bcSections = linphone_config_get_sections_names_list(lpConfig);
-	// Loop on all sections and load configuration. If this is not a LDAP configuration, the model is discarded.
-	for (auto itSections = bcSections; itSections; itSections = itSections->next) {
-		std::string section = static_cast<char *>(itSections->data);
-		std::shared_ptr<Ldap> ldap = Ldap::create(getPublic()->getSharedFromThis(), section);
-		if (ldap) ldapList.push_back(ldap);
-	}
-	if (bcSections) bctbx_list_free(bcSections);
-	ldapList.sort([](std::shared_ptr<Ldap> a, std::shared_ptr<Ldap> b) { return a->getIndex() < b->getIndex(); });
-	mLdapServers = ldapList;
-}
 
-void Core::addLdap(std::shared_ptr<Ldap> ldap) {
-	if (ldap->getLdapParams()) {
-		ldap->writeToConfigFile();
-		auto itLdapStored = getLdapIterator(ldap->getIndex());
-		if (itLdapStored == getPrivate()->mLdapServers.end()) { // New
-			getPrivate()->mLdapServers.push_back(ldap);
-			getPrivate()->mLdapServers.sort(
-			    [](std::shared_ptr<Ldap> a, std::shared_ptr<Ldap> b) { return a->getIndex() < b->getIndex(); });
-		} else { // Update
-			*itLdapStored = ldap;
+	string carddavSection = "carddav_";
+	string ldapSection = "ldap_";
+	list<shared_ptr<RemoteContactDirectory>> paramsList;
+	for (auto itSections = bcSections; itSections; itSections = itSections->next) {
+		string section = static_cast<char *>(itSections->data);
+		if (section.rfind(carddavSection, 0) == 0) {
+			string indexStr = section.substr(carddavSection.size());
+			if (!indexStr.empty()) {
+				try {
+					int index = stoi(indexStr);
+					auto params = CardDavParams::create(core, index);
+					auto remoteContactDirectory = RemoteContactDirectory::create(params);
+					paramsList.push_back(remoteContactDirectory);
+				} catch (const invalid_argument &) {
+				} catch (const out_of_range &) {
+				}
+			}
+		} else if (section.rfind(ldapSection, 0) == 0) {
+			string indexStr = section.substr(ldapSection.size());
+			if (!indexStr.empty()) {
+				try {
+					int index = stoi(indexStr);
+					auto params = LdapParams::create(core, index);
+					auto remoteContactDirectory = RemoteContactDirectory::create(params);
+					paramsList.push_back(remoteContactDirectory);
+				} catch (const invalid_argument &) {
+				} catch (const out_of_range &) {
+				}
+			}
 		}
 	}
+
+	if (bcSections) bctbx_list_free(bcSections);
+	mRemoteContactDirectories = paramsList;
 }
 
-void Core::removeLdap(std::shared_ptr<Ldap> ldap) {
-	auto itLdapStored = getLdapIterator(ldap->getIndex());
-	if (itLdapStored != getPrivate()->mLdapServers.end()) {
-		getPrivate()->mLdapServers.erase(itLdapStored);
-		ldap->removeFromConfigFile();
-	}
-}
 // -----------------------------------------------------------------------------
 // Signal Infomrations
 // -----------------------------------------------------------------------------
+
 void Core::setSignalInformation(std::shared_ptr<SignalInformation> signalInformation) {
 	mSignalInformation = signalInformation;
 }
@@ -1801,13 +1839,13 @@ void Core::destroyTimer(belle_sip_source_t *timer) {
 
 void Core::invalidateAccountInConferencesAndChatRooms(const std::shared_ptr<Account> &account) {
 	L_D();
-	for (const auto &[id, conference] : d->conferenceById) {
+	for (const auto &[id, conference] : d->mConferenceById) {
 		if (account == conference->getAccount()) {
 			conference->invalidateAccount();
 		}
 	}
 
-	for (const auto &[id, chatRoom] : d->chatRoomsById) {
+	for (const auto &[id, chatRoom] : d->mChatRoomsById) {
 		if (account == chatRoom->getAccount()) {
 			chatRoom->invalidateAccount();
 		}
@@ -1819,6 +1857,7 @@ void Core::setConferenceCleanupPeriod(long seconds) {
 	auto oldPeriod = getConferenceCleanupPeriod();
 	LinphoneConfig *config = linphone_core_get_config(getCCore());
 	linphone_config_set_int64(config, "misc", "conference_cleanup_period", seconds);
+	lInfo() << "Set conference clean window to " << seconds << " seconds";
 	if ((oldPeriod <= 0) && (seconds > 0)) {
 		// Create cleanup time if not already done
 		d->createConferenceCleanupTimer();
@@ -1826,8 +1865,9 @@ void Core::setConferenceCleanupPeriod(long seconds) {
 		// Stop time if the new period is 0 or lower
 		d->stopConferenceCleanupTimer();
 	} else {
-		// Only update timeout
-		belle_sip_source_set_timeout_int64(d->mConferenceCleanupTimer, seconds);
+		// Update timer
+		d->stopConferenceCleanupTimer();
+		d->createConferenceCleanupTimer();
 	}
 }
 
@@ -1836,12 +1876,47 @@ long Core::getConferenceCleanupPeriod() const {
 	                                       -1);
 }
 
+void Core::setConferenceAvailabilityBeforeStart(long seconds) {
+	LinphoneConfig *config = linphone_core_get_config(getCCore());
+	linphone_config_set_int64(config, "misc", "conference_available_before_period", seconds);
+	lInfo() << "Set conference avaibility before start to " << seconds << " seconds";
+}
+
+long Core::getConferenceAvailabilityBeforeStart() const {
+	return (long)linphone_config_get_int64(linphone_core_get_config(getCCore()), "misc",
+	                                       "conference_available_before_period", -1);
+}
+
+void Core::setConferenceExpirePeriod(long seconds) {
+	LinphoneConfig *config = linphone_core_get_config(getCCore());
+	linphone_config_set_int64(config, "misc", "conference_expire_period", seconds);
+	lInfo() << "Set conference expire period to " << seconds << " seconds";
+}
+
+long Core::getConferenceExpirePeriod() const {
+	// Default to 30 minutes
+	return (long)linphone_config_get_int64(linphone_core_get_config(getCCore()), "misc", "conference_expire_period",
+	                                       1800);
+}
+
+void Core::setAccountDeletionTimeout(unsigned int seconds) {
+	if (seconds == 0) {
+		lError() << "Unable to disable automatic deletion of accounts";
+	}
+	mAccountDeletionTimeout = seconds;
+}
+
+unsigned int Core::getAccountDeletionTimeout() const {
+	return mAccountDeletionTimeout;
+}
+
 std::shared_ptr<Conference> Core::findConference(const std::shared_ptr<const CallSession> &session,
                                                  bool logIfNotFound) const {
 
 	L_D();
-	for (const auto &[id, conference] : d->conferenceById) {
-		if (session == conference->getMainSession()) {
+	for (const auto &[id, conference] : d->mConferenceById) {
+		const auto &conferenceSession = conference->getMainSession();
+		if (conferenceSession && (session == conferenceSession)) {
 			return conference;
 		}
 	}
@@ -1855,7 +1930,7 @@ std::shared_ptr<Conference> Core::findConference(const std::shared_ptr<const Cal
 	}
 
 	if (logIfNotFound) {
-		lInfo() << "Unable to find audio video conference session " << session << " (local address "
+		lInfo() << "Unable to find the conference session " << session << " (local address "
 		        << *session->getLocalAddress() << " remote address "
 		        << (session->getRemoteAddress() ? session->getRemoteAddress()->toString() : "Unknown")
 		        << ") belongs to";
@@ -1866,13 +1941,12 @@ std::shared_ptr<Conference> Core::findConference(const std::shared_ptr<const Cal
 std::shared_ptr<Conference> Core::findConference(const ConferenceId &conferenceId, bool logIfNotFound) const {
 	L_D();
 	try {
-		auto conference = d->conferenceById.at(conferenceId);
-		lInfo() << "Found audio video conference " << conference << " in RAM with conference ID " << conferenceId
-		        << ".";
+		auto conference = d->mConferenceById.at(conferenceId);
+		lInfo() << "Found " << *conference << " in RAM with conference ID " << conferenceId << ".";
 		return conference;
 	} catch (const out_of_range &) {
 		if (logIfNotFound) {
-			lInfo() << "Unable to find audio video conference with conference ID " << conferenceId << " in RAM.";
+			lInfo() << "Unable to find conference with conference ID " << conferenceId << " in RAM.";
 		}
 	}
 	return nullptr;
@@ -1885,108 +1959,85 @@ void Core::insertConference(const shared_ptr<Conference> conference) {
 
 	const ConferenceId &conferenceId = conference->getConferenceId();
 	if (!conferenceId.isValid()) {
-		lInfo() << "Attempting to insert conference " << conference << " with invalid conference ID " << conferenceId;
+		lInfo() << "Attempting to insert " << *conference << " with invalid conference ID " << conferenceId;
 		return;
 	}
 
-	auto conf = findConference(conferenceId);
-	if (!conf && conference->getCurrentParams()->chatEnabled()) {
-		// Handling of chat room exhume
-		const auto &chatRoom = findChatRoom(conferenceId);
-		if (chatRoom) {
-			conf = chatRoom->getConference();
+	bool isStartup = (linphone_core_get_global_state(getCCore()) == LinphoneGlobalStartup);
+	std::shared_ptr<Conference> conf;
+	if (!isStartup) {
+		if (conference->getCurrentParams()->chatEnabled()) {
+			// Handling of chat room exhume
+			const auto &chatRoom = findChatRoom(conferenceId, false);
+			if (chatRoom) {
+				conf = chatRoom->getConference();
+			}
+		} else {
+			conf = findConference(conferenceId, false);
 		}
+		// When starting the LinphoneCore, it may happen to have 2 audio video conferences or chat room that have the
+		// same conference ID apart from the GRUU which is not taken into the account for the comparison. In such a
+		// scenario, it is allowed to replace the pointer towards the audio video conference in the core map. Method
+		// addChatRoomToList will take care of setting the right pointer before exiting
+		L_ASSERT(conf == nullptr || conf == conference);
 	}
-	// When starting the LinphoneCore, it may happen to have 2 audio video conferences or chat room that have the same
-	// conference ID apart from the GRUU which is not taken into the account for the comparison. In such a scenario, it
-	// is allowed to replace the pointer towards the audio video conference in the core map. Method addChatRoomToList
-	// will take care of setting the right pointer before exiting
-	L_ASSERT(conf == nullptr || conf == conference ||
-	         linphone_core_get_global_state(getCCore()) == LinphoneGlobalStartup);
-	if (conf == nullptr) {
-		lInfo() << "Insert audio video conference " << conference << " in RAM with conference ID " << conferenceId
-		        << ".";
-		d->conferenceById.insert(std::make_pair(conferenceId, conference));
-	} else if (conf != conference) {
-		lWarning() << "Replacing audio video conference with conference ID " << conferenceId << " in the core map "
-		           << conf << " with " << conference << ". This might happen if your database has been corrupted";
-		d->conferenceById[conferenceId] = conference;
+	if ((conf == nullptr) || (conf != conference)) {
+		lInfo() << "Insert " << *conference << " in RAM with conference ID " << conferenceId << ".";
+		d->mConferenceById.insert_or_assign(conferenceId, conference);
 	}
 }
 
 void Core::deleteConference(const ConferenceId &conferenceId) {
 	L_D();
-	auto it = d->conferenceById.find(conferenceId);
-	if (it != d->conferenceById.cend()) {
-		lInfo() << "Delete audio video conference in RAM with conference ID " << conferenceId << ".";
-		d->conferenceById.erase(it);
+	auto it = d->mConferenceById.find(conferenceId);
+	if (it != d->mConferenceById.cend()) {
+		lInfo() << "Delete " << *(it->second) << " in RAM with conference ID " << conferenceId << ".";
+		d->mConferenceById.erase(it);
 	}
 }
 
 void Core::deleteConference(const shared_ptr<const Conference> &conference) {
-	L_D();
 	const ConferenceId &conferenceId = conference->getConferenceId();
-	auto it = d->conferenceById.find(conferenceId);
-	if (it != d->conferenceById.cend()) {
-		lInfo() << "Delete audio video conference in RAM with conference ID " << conferenceId << ".";
-		d->conferenceById.erase(it);
-	}
+	deleteConference(conferenceId);
 }
 
-shared_ptr<Conference> Core::searchConference(const shared_ptr<ConferenceParams> &params,
-                                              const std::shared_ptr<const Address> &localAddress,
-                                              const std::shared_ptr<const Address> &remoteAddress,
-                                              const std::list<std::shared_ptr<Address>> &participants) const {
+std::shared_ptr<Conference> Core::searchConference(const std::shared_ptr<ConferenceParams> &params,
+                                                   const std::shared_ptr<const Address> &localAddress,
+                                                   const std::shared_ptr<const Address> &remoteAddress,
+                                                   const std::list<std::shared_ptr<Address>> &participants) const {
 	L_D();
-	auto localAddressUri = (localAddress) ? localAddress->getUriWithoutGruu() : Address();
-	auto remoteAddressUri = (remoteAddress) ? remoteAddress->getUriWithoutGruu() : Address();
-	const auto it = std::find_if(d->conferenceById.begin(), d->conferenceById.end(), [&](const auto &p) {
-		// p is of type std::pair<ConferenceId, std::shared_ptr<Conference>
-		const auto &conference = p.second;
-		const ConferenceId &conferenceId = conference->getConferenceId();
-		auto curLocalAddress =
-		    (conferenceId.getLocalAddress()) ? conferenceId.getLocalAddress()->getUriWithoutGruu() : Address();
-		if (localAddressUri.isValid() && (localAddressUri != curLocalAddress)) return false;
+	ConferenceContext referenceConferenceContext(params, localAddress, remoteAddress, participants);
+	const auto it = std::find_if(
+	    d->mConferenceById.begin(), d->mConferenceById.end(), [&referenceConferenceContext](const auto &p) {
+		    // p is of type std::pair<ConferenceId, std::shared_ptr<Conference>
+		    const auto &conference = p.second;
+		    const ConferenceId &conferenceId = conference->getConferenceId();
+		    ConferenceContext conferenceContext(conference->getCurrentParams(), conferenceId.getLocalAddress(),
+		                                        conferenceId.getPeerAddress(), conference->getParticipantAddresses());
+		    return (referenceConferenceContext == conferenceContext);
+	    });
 
-		auto curPeerAddress =
-		    (conferenceId.getPeerAddress()) ? conferenceId.getPeerAddress()->getUriWithoutGruu() : Address();
-		if (remoteAddressUri.isValid() && (remoteAddressUri != curPeerAddress)) return false;
-
-		// Check parameters only if pointer provided as argument is not null
-		if (params) {
-			const auto &conferenceParams = conference->getCurrentParams();
-			if (!params->getSubject().empty() && (params->getSubject().compare(conferenceParams->getSubject()) != 0))
-				return false;
-			if (params->chatEnabled() != conferenceParams->chatEnabled()) return false;
-			if (params->audioEnabled() != conferenceParams->audioEnabled()) return false;
-			if (params->videoEnabled() != conferenceParams->videoEnabled()) return false;
-			if (params->localParticipantEnabled() != conferenceParams->localParticipantEnabled()) return false;
-		}
-
-		// Check participants only if list provided as argument is not empty
-		bool participantListMatch = true;
-		if (participants.empty() == false) {
-			const std::list<std::shared_ptr<Participant>> &confParticipants = conference->getParticipants();
-			participantListMatch =
-			    equal(participants.cbegin(), participants.cend(), confParticipants.cbegin(), confParticipants.cend(),
-			          [](const auto &p1, const auto &p2) { return (p1->weakEqual(*p2->getAddress())); });
-		}
-		return participantListMatch;
-	});
-
-	shared_ptr<Conference> conference = nullptr;
-	if (it != d->conferenceById.cend()) {
+	std::shared_ptr<Conference> conference;
+	if (it != d->mConferenceById.cend()) {
 		conference = it->second;
 	}
 
 	return conference;
 }
 
+std::shared_ptr<Conference> Core::searchConference(const std::string identifier) const {
+	auto [localAddress, peerAddress] = ConferenceId::parseIdentifier(identifier);
+	if (!localAddress || !localAddress->isValid() || !peerAddress || !peerAddress->isValid()) {
+		return nullptr;
+	}
+	return searchConference(nullptr, localAddress, peerAddress, {});
+}
+
 shared_ptr<Conference> Core::searchConference(const std::shared_ptr<const Address> &conferenceAddress) const {
 	L_D();
 
 	if (!conferenceAddress || !conferenceAddress->isValid()) return nullptr;
-	const auto it = std::find_if(d->conferenceById.begin(), d->conferenceById.end(), [&](const auto &p) {
+	const auto it = std::find_if(d->mConferenceById.begin(), d->mConferenceById.end(), [&](const auto &p) {
 		// p is of type std::pair<ConferenceId, std::shared_ptr<Conference>
 		const auto &conference = p.second;
 		const auto curConferenceAddress = conference->getConferenceAddress();
@@ -1994,41 +2045,70 @@ shared_ptr<Conference> Core::searchConference(const std::shared_ptr<const Addres
 	});
 
 	shared_ptr<Conference> conference = nullptr;
-	if (it != d->conferenceById.cend()) {
+	if (it != d->mConferenceById.cend()) {
 		conference = it->second;
 	}
 
 	return conference;
 }
 
+void Core::removeConferencePendingCreation(const std::shared_ptr<Conference> &conference) {
+	mConferencesPendingCreation.remove(conference);
+}
+
+void Core::addConferencePendingCreation(const std::shared_ptr<Conference> &conference) {
+	auto it = std::find(mConferencesPendingCreation.begin(), mConferencesPendingCreation.end(), conference);
+	if (it == mConferencesPendingCreation.end()) {
+		mConferencesPendingCreation.push_back(conference);
+	}
+}
+
+void Core::removeConferenceScheduler(const std::shared_ptr<ConferenceScheduler> &scheduler) {
+	mSipConferenceSchedulers.remove(scheduler);
+}
+
+void Core::addConferenceScheduler(const std::shared_ptr<ConferenceScheduler> &scheduler) {
+	auto it = std::find(mSipConferenceSchedulers.begin(), mSipConferenceSchedulers.end(), scheduler);
+	if (it == mSipConferenceSchedulers.end()) {
+		mSipConferenceSchedulers.push_back(scheduler);
+	}
+}
+
 shared_ptr<CallSession> Core::createOrUpdateConferenceOnServer(const std::shared_ptr<ConferenceParams> &confParams,
-                                                               const std::shared_ptr<const Address> &localAddr,
                                                                const std::list<Address> &participants,
                                                                const std::shared_ptr<Address> &confAddr,
-                                                               CallSessionListener *listener) {
+                                                               std::shared_ptr<CallSessionListener> listener) {
 	if (!confParams) {
-		lWarning() << "Trying to create conference with null parameters";
+		lWarning() << "Trying to create or update conference with null parameters";
 		return nullptr;
 	}
 
 	MediaSessionParams params;
 	params.initDefault(getSharedFromThis(), LinphoneCallOutgoing);
 
-	const auto &account = confParams->getAccount();
+	auto account = confParams->getAccount();
+	if (!account) {
+		account = getDefaultAccount();
+	}
+	if (!account) {
+		lWarning() << "Unable to create or update a conference without an account associated";
+		return nullptr;
+	}
 	params.setAccount(account);
 
 	std::shared_ptr<Address> conferenceFactoryUri;
+	bool mediaEnabled = (confParams->audioEnabled() || confParams->videoEnabled());
 	if (confAddr) {
 		conferenceFactoryUri = confAddr;
 	} else {
-		std::shared_ptr<Address> conferenceFactoryUriRef;
-		if (confParams->audioEnabled() || confParams->videoEnabled()) {
-			conferenceFactoryUriRef = Core::getAudioVideoConferenceFactoryAddress(getSharedFromThis(), localAddr);
+		std::shared_ptr<const Address> conferenceFactoryUriRef;
+		if (mediaEnabled) {
+			conferenceFactoryUriRef = Core::getAudioVideoConferenceFactoryAddress(getSharedFromThis(), account);
 		} else {
-			conferenceFactoryUriRef = Core::getConferenceFactoryAddress(getSharedFromThis(), localAddr);
+			conferenceFactoryUriRef = account->getAccountParams()->getConferenceFactoryAddress();
 		}
 		if (!conferenceFactoryUriRef || !conferenceFactoryUriRef->isValid()) {
-			lWarning() << "Not creating conference: no conference factory uri for local address [" << *localAddr << "]";
+			lWarning() << "Not creating or updating conference: no conference factory uri for account " << *account;
 			return nullptr;
 		}
 		conferenceFactoryUri = conferenceFactoryUriRef->clone()->toSharedPtr();
@@ -2036,8 +2116,14 @@ shared_ptr<CallSession> Core::createOrUpdateConferenceOnServer(const std::shared
 		                                  ConferenceParams::getSecurityLevelAttribute(confParams->getSecurityLevel()));
 	}
 
+	if (!!linphone_core_get_add_admin_information_to_contact(getCCore())) {
+		params.addCustomContactParameter(Conference::AdminParameter, Utils::toString(true));
+	}
+
 	if (confParams->chatEnabled()) {
-		params.addCustomContactParameter("text");
+		if (!mediaEnabled) {
+			params.addCustomContactParameter(Conference::TextParameter);
+		}
 		params.addCustomHeader("Require", "recipient-list-invite");
 		params.addCustomHeader("One-To-One-Chat-Room", Utils::btos(!confParams->isGroup()));
 		params.addCustomHeader("End-To-End-Encrypted", Utils::btos(confParams->getChatParams()->isEncrypted()));
@@ -2045,7 +2131,6 @@ shared_ptr<CallSession> Core::createOrUpdateConferenceOnServer(const std::shared
 		                                                  AbstractChatRoom::EphemeralMode::AdminManaged));
 		params.addCustomHeader("Ephemeral-Life-Time", to_string(confParams->getChatParams()->getEphemeralLifetime()));
 	}
-	params.addCustomContactParameter("admin", Utils::toString(true));
 
 	if (!participants.empty()) {
 		auto addresses = participants;
@@ -2068,10 +2153,13 @@ shared_ptr<CallSession> Core::createOrUpdateConferenceOnServer(const std::shared
 	params.getPrivate()->setEndTime(confParams->getEndTime());
 	params.getPrivate()->setDescription(confParams->getDescription());
 	params.getPrivate()->setConferenceCreation(true);
+	params.getPrivate()->disableRinging(true);
 	params.getPrivate()->enableToneIndications(false);
 
+	const auto &localAddr = account->getAccountParams()->getIdentityAddress();
 	auto participant = Participant::create(nullptr, localAddr);
-	auto session = participant->createSession(getSharedFromThis(), &params, true, listener);
+	auto session = participant->createSession(getSharedFromThis(), &params, true);
+	session->addListener(listener);
 	bool isMediaSession = (dynamic_pointer_cast<MediaSession>(session) != nullptr);
 
 	if (!session) {
@@ -2100,7 +2188,7 @@ shared_ptr<CallSession> Core::createOrUpdateConferenceOnServer(const std::shared
 	if (!isMediaSession) {
 		session->getPrivate()->createOp();
 	}
-	session->startInvite(nullptr, confParams->getSubject(), nullptr);
+	session->startInvite(nullptr, confParams->getUtf8Subject(), nullptr);
 	return session;
 }
 
@@ -2114,19 +2202,30 @@ const std::list<LinphoneMediaEncryption> Core::getSupportedMediaEncryptions() co
 	return encEnumList;
 }
 
-const std::shared_ptr<Address>
+std::shared_ptr<const Address>
 Core::getAudioVideoConferenceFactoryAddress(const std::shared_ptr<Core> &core,
                                             const std::shared_ptr<const Address> &localAddress) {
 	auto account = core->lookupKnownAccount(localAddress, true);
 	if (!account) {
-		lWarning() << "No account found for local address: [" << *localAddress << "]";
+		// lWarning() << "No account found for local address: [" << *localAddress << "]";
 		return nullptr;
 	} else return getAudioVideoConferenceFactoryAddress(core, account);
 }
 
-const std::shared_ptr<Address> Core::getAudioVideoConferenceFactoryAddress(const std::shared_ptr<Core> &core,
-                                                                           const std::shared_ptr<Account> account) {
-	const auto &address = account->getAccountParams()->getAudioVideoConferenceFactoryAddress();
+std::shared_ptr<const Address> Core::getAudioVideoConferenceFactoryAddress(const std::shared_ptr<Core> &core,
+                                                                           const std::shared_ptr<Account> &account) {
+	if (!account) {
+		lError() << "Unable to retrieve the audio video conference factory address from a null account";
+		return nullptr;
+	}
+	const auto &params = account->getAccountParams();
+	if (!params) {
+		lError() << *account
+		         << " doesn't have a valid set of parameters, hence it is not possible to retrieve the audio video "
+		            "conference factory address";
+		return nullptr;
+	}
+	auto address = params->getAudioVideoConferenceFactoryAddress();
 	if (address == nullptr) {
 		const auto &conferenceFactoryUri = getConferenceFactoryAddress(core, account);
 		lWarning() << "Audio/video conference factory is null, fallback to default conference factory URI ["
@@ -2525,11 +2624,24 @@ void Core::removeAccount(std::shared_ptr<Account> account) {
 		return;
 	}
 
+	auto accountParams = account->getAccountParams();
+	auto coreState = linphone_core_get_global_state(getCCore());
 	/* we also need to update the accounts list */
 	accounts.erase(accountIt);
 	removeDependentAccount(account);
-	/* add to the list of destroyed accounts, so that the possible unREGISTER request can succeed authentication */
-	mDeletedAccounts.mList.push_back(account);
+	/* When the core is ON, add to the list of destroyed accounts, so that the possible unREGISTER request can succeed
+	 * authentication. If not ON, no unregistration is made in this case. This might happen during a Core restart.
+	 * Also there is not need to trigger the deletion timer if the account hasn't registered.
+	 * The if statement is also entered if a REGISTER is sent and the account is removed while it is still in the state
+	 * LinphoneRegistrationProgress (i.e. before receiving the 200Ok response). In such a scenario, in fact an account
+	 * waits for the 200Ok response and then it sends another REGISTER message with the Expires header set to 0. */
+	if (accountParams->getRegisterEnabled() && (coreState == LinphoneGlobalOn)) {
+		mDeletedAccounts.mList.push_back(account);
+		account->triggerDeletion();
+	} else {
+		account->releaseOps();
+		account->setConfig(nullptr);
+	}
 
 	invalidateAccountInConferencesAndChatRooms(account);
 
@@ -2539,20 +2651,25 @@ void Core::removeAccount(std::shared_ptr<Account> account) {
 
 	linphone_core_notify_account_removed(getCCore(), account->toC());
 
-	account->setDeletionDate(ms_time(NULL));
-
-	if (getCCore()->state == LinphoneGlobalOn) {
+	if (coreState == LinphoneGlobalOn) {
 		// Update the associated linphone specs on the core
-		auto params = account->getAccountParams()->clone()->toSharedPtr();
-		params->setRegisterEnabled(false);
-		params->setConferenceFactoryAddress(nullptr);
-		account->setAccountParams(params);
+		auto newAccountParams = accountParams->clone()->toSharedPtr();
+		newAccountParams->setRegisterEnabled(false);
+		newAccountParams->setConferenceFactoryAddress(nullptr);
+		account->setAccountParams(newAccountParams);
 	}
-
-	if (account->getState() == LinphoneRegistrationOk) {
-		account->update();
-	} else if (account->getState() != LinphoneRegistrationNone) {
-		account->setState(LinphoneRegistrationNone, "Registration disabled");
+	auto state = account->getState();
+	switch (state) {
+		case LinphoneRegistrationNone:
+		case LinphoneRegistrationOk:
+		case LinphoneRegistrationRefreshing:
+		case LinphoneRegistrationProgress:
+			// iterate will do the job.
+			break;
+		case LinphoneRegistrationFailed:
+		case LinphoneRegistrationCleared:
+			account->setState(LinphoneRegistrationNone, "Registration disabled");
+			break;
 	}
 	Account::writeAllToConfigFile(getSharedFromThis());
 }
@@ -2561,9 +2678,16 @@ void Core::removeDeletedAccount(const std::shared_ptr<Account> &account) {
 	auto &accounts = mDeletedAccounts.mList;
 	const auto accountIt = std::find(accounts.cbegin(), accounts.cend(), account);
 	if (accountIt == accounts.cend()) {
-		lError() << "Account [ " << account << "] is not in the list odf deleted accounts";
+		lError() << "Account [ " << account << "] is not in the list of deleted accounts";
 		return;
 	}
+	const auto &params = account->getAccountParams();
+	lInfo() << "Account for [" << *params->getServerAddress() << "] is definitely removed from core.";
+	account->releaseOps();
+	// Setting the proxy config associated to an account to NULL will cause its destruction and therefore losing the
+	// reference held by it to the Account object. In this way, the memory occupied by the account to be deleted is
+	// properly once it is erased by the account list
+	account->setConfig(nullptr);
 	/* we also need to update the accounts list */
 	accounts.erase(accountIt);
 }
@@ -2592,7 +2716,7 @@ LinphoneStatus Core::addAccount(std::shared_ptr<Account> account) {
 		lWarning() << "Account already entered, ignored.";
 		return 0;
 	}
-
+	account->cancelDeletion(); // in case this account had been previously be removed from the Core.
 	mAccounts.mList.push_back(account);
 
 	// If there is no back pointer to a proxy config then create a proxy config that will depend on this account
@@ -2668,6 +2792,7 @@ void Core::releaseAccounts() {
 
 	for (const auto &account : getDeletedAccounts()) {
 		account->releaseOps();
+		account->cancelDeletion();
 	}
 }
 
@@ -2690,6 +2815,13 @@ const bctbx_list_t *Core::getAccountsCList() const {
 
 std::shared_ptr<Account> Core::lookupKnownAccount(const std::shared_ptr<const Address> uri,
                                                   bool fallbackToDefault) const {
+	if (uri) {
+		return lookupKnownAccount(*uri, fallbackToDefault);
+	}
+	return nullptr;
+}
+
+std::shared_ptr<Account> Core::lookupKnownAccount(const Address &uri, bool fallbackToDefault) const {
 	std::shared_ptr<Account> foundAccount = NULL;
 	std::shared_ptr<Account> foundRegAccount = NULL;
 	std::shared_ptr<Account> foundNoRegAccount = NULL;
@@ -2698,13 +2830,13 @@ std::shared_ptr<Account> Core::lookupKnownAccount(const std::shared_ptr<const Ad
 	std::shared_ptr<Account> foundNoRegAccountDomainMatch = NULL;
 	std::shared_ptr<Account> defaultAccount = getDefaultAccount();
 
-	if (!uri || !uri->isValid()) {
+	if (!uri.isValid()) {
 		lError() << "Cannot look for account for NULL uri, returning default";
 		return defaultAccount;
 	}
-	const std::string uriDomain = uri->getDomain();
+	const std::string uriDomain = uri.getDomain();
 	if (uriDomain.empty()) {
-		lInfo() << "Cannot look for account for uri [" << *uri << "] that has no domain set, returning default";
+		lInfo() << "Cannot look for account for uri [" << uri << "] that has no domain set, returning default";
 		return defaultAccount;
 	}
 
@@ -2712,7 +2844,7 @@ std::shared_ptr<Account> Core::lookupKnownAccount(const std::shared_ptr<const Ad
 	if (defaultAccount) {
 		const auto &defaultAccountParams = defaultAccount->getAccountParams();
 		const auto &identityAddress = defaultAccountParams->getIdentityAddress();
-		if (uri->weakEqual(*identityAddress)) {
+		if (uri.weakEqual(*identityAddress)) {
 			foundAccount = defaultAccount;
 			goto end;
 		}
@@ -2728,7 +2860,7 @@ std::shared_ptr<Account> Core::lookupKnownAccount(const std::shared_ptr<const Ad
 		const auto &identityAddress = accountParams->getIdentityAddress();
 		const auto registered = (account->getState() == LinphoneRegistrationOk);
 		const auto canRegister = accountParams->getRegisterEnabled();
-		if (uri->weakEqual(*identityAddress)) {
+		if (uri.weakEqual(*identityAddress)) {
 			if (registered) {
 				foundAccount = account;
 				break;
@@ -2773,18 +2905,6 @@ end:
 	return foundAccount;
 }
 
-void Core::removeDeletedAccounts() {
-	const auto deletedAccounts = mDeletedAccounts.mList;
-	for (const auto &account : deletedAccounts) {
-		if ((ms_time(NULL) - account->getDeletionDate()) > 32) {
-			removeDeletedAccount(account);
-			const auto &params = account->getAccountParams();
-			lInfo() << "Account for [" << *params->getServerAddress() << "] is definitely removed from core.";
-			account->releaseOps();
-		}
-	}
-}
-
 std::shared_ptr<Account> Core::findAccountByIdentityAddress(const std::shared_ptr<const Address> identity) const {
 	std::shared_ptr<Account> found = nullptr;
 	if (!identity) return found;
@@ -2793,7 +2913,23 @@ std::shared_ptr<Account> Core::findAccountByIdentityAddress(const std::shared_pt
 	for (const auto &account : accounts) {
 		const auto &params = account->getAccountParams();
 		const auto &address = params->getIdentityAddress();
-		if (identity->weakEqual(*address)) {
+		if (address && identity->weakEqual(address)) {
+			found = account;
+			break;
+		}
+	}
+	return found;
+}
+
+std::shared_ptr<Account> Core::findAccountByUsername(const std::string &username) const {
+	std::shared_ptr<Account> found = nullptr;
+	if (username.empty()) return found;
+
+	auto &accounts = mAccounts.mList;
+	for (const auto &account : accounts) {
+		const auto &params = account->getAccountParams();
+		const auto &address = params->getIdentityAddress();
+		if (address && address->getUsername() == username) {
 			found = account;
 			break;
 		}
@@ -2843,31 +2979,37 @@ bool Core::refreshTokens(const std::shared_ptr<AuthInfo> &ai) {
 	if (!ai->getClientId().empty()) {
 		form += "&client_id=" + ai->getClientId();
 	}
-	getHttpClient()
-	    .createRequest("POST", ai->getTokenEndpointUri())
-	    .setBody(Content(ContentType("application", "x-www-form-urlencoded"), form))
-	    .execute([this, ai](const HttpResponse &response) {
-		    if (response.getStatusCode() == 200) {
-			    JsonDocument doc(response.getBody());
-			    const Json::Value &root = doc.getRoot();
-			    if (!root.isNull()) {
-				    auto bearerToken = (new BearerToken(root["access_token"].asString(),
-				                                        time(NULL) + (time_t)root["expires_in"].asInt64()))
-				                           ->toSharedPtr();
-				    ai->setAccessToken(bearerToken);
-				    string refreshToken = root["refresh_token"].asString();
-				    if (!refreshToken.empty()) {
-					    // FIXME: how to get the expiration of the refresh token ?
-					    auto bearerRefreshToken = (new BearerToken(refreshToken, time(NULL)))->toSharedPtr();
-					    ai->setRefreshToken(bearerRefreshToken);
+	try {
+		getHttpClient()
+		    .createRequest("POST", ai->getTokenEndpointUri())
+		    .setBody(Content(ContentType("application", "x-www-form-urlencoded"), form))
+		    .execute([this, ai](const HttpResponse &response) {
+			    if (response.getHttpStatusCode() == 200) {
+				    JsonDocument doc(response.getBody());
+				    const Json::Value &root = doc.getRoot();
+				    if (!root.isNull()) {
+					    auto bearerToken = (new BearerToken(root["access_token"].asString(),
+					                                        time(NULL) + (time_t)root["expires_in"].asInt64()))
+					                           ->toSharedPtr();
+					    ai->setAccessToken(bearerToken);
+					    string refreshToken = root["refresh_token"].asString();
+					    if (!refreshToken.empty()) {
+						    // FIXME: how to get the expiration of the refresh token ?
+						    auto bearerRefreshToken = (new BearerToken(refreshToken, time(NULL)))->toSharedPtr();
+						    ai->setRefreshToken(bearerRefreshToken);
+					    }
+					    /* this will resubmit all pending authentications */
+					    linphone_core_add_auth_info(getCCore(), ai->toC());
+					    return;
 				    }
-				    /* this will resubmit all pending authentications */
-				    linphone_core_add_auth_info(getCCore(), ai->toC());
-				    return;
 			    }
-		    }
-		    lError() << "Token refreshing failed.";
-	    });
+			    lError() << "Token refreshing failed, invoking authentication_requested...";
+			    linphone_core_notify_authentication_requested(getCCore(), ai->toC(), LinphoneAuthBearer);
+		    });
+	} catch (const std::exception &e) {
+		lError() << "Cannot refresh access token: " << e.what();
+		return false;
+	}
 	return true;
 }
 
@@ -2897,8 +3039,7 @@ shared_ptr<EktInfo> Core::createEktInfoFromXml(const std::string &xmlBody) const
 		return ei;
 	}
 
-	auto &sSpi = crypto->getSspi();
-	if (sSpi) {
+	if (const auto &sSpi = crypto->getSspi()) {
 		ei->setSSpi(static_cast<uint16_t>(sSpi));
 	} else {
 		lError() << "Core::createEktInfoFromXml : Missing sSPI";
@@ -2922,11 +3063,20 @@ shared_ptr<EktInfo> Core::createEktInfoFromXml(const std::string &xmlBody) const
 	return ei;
 }
 
-string Core::createXmlFromEktInfo(const shared_ptr<const EktInfo> &ei) const {
-	auto account = getDefaultAccount();
-	auto addr = account->getContactAddress();
+string Core::createXmlFromEktInfo(const shared_ptr<const EktInfo> &ei, const shared_ptr<const Account> &account) const {
+	stringstream xmlBody;
+	shared_ptr<Address> addr = nullptr;
+	if (account) {
+		addr = account->getContactAddress();
+	} else if (getDefaultAccount()) {
+		lWarning() << __func__ << " : The account passed as an argument is null, using the default account";
+		addr = getDefaultAccount()->getContactAddress();
+	} else {
+		lError() << __func__ << " : No valid account found, return an empty XML body";
+		return xmlBody.str();
+	}
 
-	CryptoType crypto = CryptoType(ei->getSSpi(), addr->asStringUriOnly());
+	auto crypto = CryptoType(ei->getSSpi(), addr->asStringUriOnly());
 
 	if (ei->getFrom()) crypto.setFrom(ei->getFrom()->asStringUriOnly());
 
@@ -2939,21 +3089,23 @@ string Core::createXmlFromEktInfo(const shared_ptr<const EktInfo> &ei) const {
 		CiphersType ciphers;
 		crypto.setCiphers(ciphers);
 		for (const auto &cipher : cipherMap) {
-			vector<uint8_t> cipherVec(ei->getCiphers()->getLinphoneBuffer(cipher.first)->content,
-			                          ei->getCiphers()->getLinphoneBuffer(cipher.first)->content +
-			                              ei->getCiphers()->getLinphoneBuffer(cipher.first)->size);
-			EncryptedektType ekt = EncryptedektType(bctoolbox::encodeBase64(cipherVec), cipher.first);
+			vector<uint8_t> cipherVec(ei->getCiphers()->getBuffer(cipher.first)->getContent().begin(),
+			                          ei->getCiphers()->getBuffer(cipher.first)->getContent().end());
+			auto ekt = EncryptedektType(bctoolbox::encodeBase64(cipherVec), cipher.first);
 			crypto.getCiphers()->getEncryptedekt().push_back(ekt);
 		}
 	}
 
-	stringstream xmlBody;
 	Xsd::XmlSchema::NamespaceInfomap map;
 	map[""].name = "linphone:xml:ns:ekt-linphone-extension";
 	serializeCrypto(xmlBody, crypto, map);
 	return xmlBody.str();
 }
 #endif // HAVE_ADVANCED_IM
+
+ConferenceIdParams Core::createConferenceIdParams() const {
+	return ConferenceIdParams(getSharedFromThis());
+}
 
 void Core::addFriendList(const shared_ptr<FriendList> &list) {
 	L_D();
@@ -2977,6 +3129,55 @@ const list<shared_ptr<FriendList>> &Core::getFriendLists() const {
 	L_D();
 
 	return d->friendLists;
+}
+
+bool Core::isEktPluginLoaded() const {
+	return mEktPluginLoaded;
+}
+
+void Core::setEktPluginLoaded(bool ektPluginLoaded) {
+	mEktPluginLoaded = ektPluginLoaded;
+}
+
+std::shared_ptr<Account> Core::guessLocalAccountFromMalformedMessage(const std::shared_ptr<Address> &localAddress,
+                                                                     const std::shared_ptr<Address> &peerAddress) {
+	if (!localAddress) return nullptr;
+
+	auto account = findAccountByIdentityAddress(localAddress);
+	if (!account) {
+		string toUser = localAddress->getUsername();
+		if (!toUser.empty() && peerAddress && Utils::isIp(localAddress->getDomain())) {
+			Address localAddressWithPeerDomain(*localAddress);
+			localAddressWithPeerDomain.setDomain(peerAddress->getDomain());
+			localAddressWithPeerDomain.setPort(0);
+			account = lookupKnownAccount(localAddressWithPeerDomain, false);
+			if (account) {
+				// We have a match for the FROM domain and the TO username.
+				// We may face an IPBPX that sets the TO domain to our IP address, which is
+				// a terribly stupid idea.
+				lWarning() << "Detecting TO header [" << localAddress->asStringUriOnly()
+				           << "] probably ill-choosen, but an account that matches the username on "
+				              "the FROM ["
+				           << peerAddress->asStringUriOnly() << "] domain was found: ["
+				           << account->getAccountParams()->getIdentityAddress()->asStringUriOnly() << "]";
+				return account;
+			} else {
+				account = findAccountByUsername(toUser);
+				if (account) {
+					lWarning() << "Detecting TO header [" << localAddress->asStringUriOnly()
+					           << "] probably ill-choosen, but an account that matches the username "
+					              "was found: ["
+					           << account->getAccountParams()->getIdentityAddress()->asStringUriOnly() << "]";
+					return account;
+				} else {
+					lWarning() << "Failed to find an account matching TO header [" << localAddress->asStringUriOnly()
+					           << "], even by using FROM header [" << peerAddress->asStringUriOnly() << "] domain";
+				}
+			}
+		}
+	}
+
+	return nullptr;
 }
 
 LINPHONE_END_NAMESPACE

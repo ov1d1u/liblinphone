@@ -32,6 +32,10 @@ using namespace std;
 LINPHONE_BEGIN_NAMESPACE
 
 ConferenceParams::ConferenceParams(const std::shared_ptr<Core> &core) : CoreAccessor(core) {
+	if (core) {
+		setHidden(
+		    !!linphone_config_get_bool(linphone_core_get_config(core->getCCore()), "misc", "hide_conferences", 0));
+	}
 }
 
 ConferenceParams::ConferenceParams(const ConferenceParams &other)
@@ -58,6 +62,8 @@ ConferenceParams::ConferenceParams(const ConferenceParams &other)
 	mMe = other.mMe ? other.mMe->clone()->toSharedPtr() : nullptr;
 	mStartTime = other.mStartTime;
 	mEndTime = other.mEndTime;
+	mEarlierJoiningTime = other.mEarlierJoiningTime;
+	mExpiryTime = other.mExpiryTime;
 	mGroup = other.mGroup;
 	mAccount = other.mAccount;
 	mHidden = other.mHidden;
@@ -66,13 +72,13 @@ ConferenceParams::ConferenceParams(const ConferenceParams &other)
 
 void ConferenceParams::setAudioVideoDefaults() {
 	try {
-		auto core = getCore()->getCCore();
-		if (core) {
+		auto cCore = getCore()->getCCore();
+		if (cCore) {
 			enableAudio(true);
-			const LinphoneVideoActivationPolicy *policy = linphone_core_get_video_activation_policy(core);
+			const LinphoneVideoActivationPolicy *policy = linphone_core_get_video_activation_policy(cCore);
 			enableVideo(linphone_video_activation_policy_get_automatically_initiate(policy));
 			setParticipantListType(
-			    static_cast<ParticipantListType>(linphone_core_get_conference_participant_list_type(core)));
+			    static_cast<ParticipantListType>(linphone_core_get_conference_participant_list_type(cCore)));
 		}
 	} catch (const bad_weak_ptr &) {
 	}
@@ -95,7 +101,7 @@ void ConferenceParams::enableChat(bool enable) {
 	}
 };
 
-const std::shared_ptr<Account> ConferenceParams::getAccount() const {
+std::shared_ptr<Account> ConferenceParams::getAccount() const {
 	return mAccount.lock();
 }
 
@@ -109,16 +115,11 @@ void ConferenceParams::updateFromAccount(
 	if (account) {
 		auto accountParams = account->getAccountParams();
 		if (accountParams) {
-			auto identity = accountParams->getIdentityAddress();
-			if (identity) {
-				setMe(identity);
-			} else {
-				setMe(nullptr);
-			}
 			if (mUseDefaultFactoryAddress) {
-				const auto &audioVideoConferenceFactory = accountParams->getAudioVideoConferenceFactoryAddress();
-				mFactoryAddress =
-				    audioVideoConferenceFactory ? audioVideoConferenceFactory->clone()->toSharedPtr() : nullptr;
+				const auto &conferenceFactory = (audioEnabled() || videoEnabled())
+				                                    ? accountParams->getAudioVideoConferenceFactoryAddress()
+				                                    : accountParams->getConferenceFactoryAddress();
+				mFactoryAddress = conferenceFactory ? conferenceFactory->clone()->toSharedPtr() : nullptr;
 				if (mFactoryAddress &&
 				    (linphone_core_get_global_state(getCore()->getCCore()) != LinphoneGlobalStartup)) {
 					lInfo() << "Update conference parameters from account, factory: " << *mFactoryAddress;
@@ -128,26 +129,36 @@ void ConferenceParams::updateFromAccount(
 	} else lDebug() << "Update conference parameters from account: no account";
 }
 
-void ConferenceParams::setUtf8Description(const std::string &description) {
-	mDescription = Utils::utf8ToLocale(description);
+const std::string &ConferenceParams::getDescription() const {
+	mDescription = Utils::utf8ToLocale(getUtf8Description());
+	return mDescription;
+}
+
+void ConferenceParams::setDescription(const std::string &description) {
+	setUtf8Description(Utils::localeToUtf8(description));
 };
 
-const std::string &ConferenceParams::getUtf8Description() const {
-	mUtf8Description = Utils::localeToUtf8(mDescription);
-	return mUtf8Description;
-};
+void ConferenceParams::setSubject(const std::string &subject) {
+	setUtf8Subject(Utils::localeToUtf8(subject));
+}
+
+const std::string &ConferenceParams::getSubject() const {
+	mSubject = Utils::utf8ToLocale(getUtf8Subject());
+	return mSubject;
+}
 
 void ConferenceParams::setUtf8Subject(const std::string &subject) {
-	mSubject = Utils::utf8ToLocale(subject);
-};
+	mUtf8Subject = subject;
+}
 
-const std::string &ConferenceParams::getUtf8Subject() const {
-	mUtf8Subject = Utils::localeToUtf8(mSubject);
-	return mUtf8Subject;
-};
-
-void ConferenceParams::setConferenceAddress(const std::shared_ptr<Address> conferenceAddress) {
-	mConferenceAddress = Address::create(conferenceAddress->getUri());
+void ConferenceParams::setConferenceAddress(const std::shared_ptr<Address> &conferenceAddress) {
+	auto cCore = getCore()->getCCore();
+	bool keepGruu = !!linphone_core_gruu_in_conference_address_enabled(cCore);
+	if (keepGruu) {
+		mConferenceAddress = Address::create(conferenceAddress->getUri());
+	} else {
+		mConferenceAddress = Address::create(conferenceAddress->getUriWithoutGruu());
+	}
 };
 
 bool ConferenceParams::isGroup() const {
@@ -160,6 +171,13 @@ void ConferenceParams::setGroup(bool group) {
 		mChatParams->setBackend(ChatParams::Backend::FlexisipChat);
 	}
 }
+
+void ConferenceParams::setSecurityLevel(const SecurityLevel &level) {
+	mSecurityLevel = level;
+	if (mChatParams) {
+		mChatParams->updateSecurityParams((mSecurityLevel == SecurityLevel::EndToEnd));
+	}
+};
 
 void ConferenceParams::updateAccordingToCapabilities(AbstractChatRoom::CapabilitiesMask capabilities) {
 	if (capabilities & AbstractChatRoom::CapabilitiesMask(AbstractChatRoom::Capabilities::Basic)) {
@@ -248,7 +266,7 @@ bool ConferenceParams::isValid() const {
 		lError() << "FlexisipChat backend must be used when group is enabled";
 		return false;
 	}
-	if (mSubject.empty() && mChatParams->getBackend() == ChatParams::Backend::FlexisipChat) {
+	if (mUtf8Subject.empty() && mChatParams->getBackend() == ChatParams::Backend::FlexisipChat) {
 		lError() << "You must set a non empty subject when using the FlexisipChat backend";
 		return false;
 	}

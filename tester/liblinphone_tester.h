@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010-2022 Belledonne Communications SARL.
+ * Copyright (c) 2010-2025 Belledonne Communications SARL.
  *
  * This file is part of Liblinphone
  * (see https://gitlab.linphone.org/BC/public/liblinphone).
@@ -63,9 +63,12 @@ extern test_suite_t call_flexfec_suite;
 extern test_suite_t call_video_advanced_scenarios_test_suite;
 #endif // if VIDEO_ENABLED
 
+#ifdef HAVE_EKT_SERVER_PLUGIN
 extern test_suite_t local_conference_test_suite_end_to_end_encryption_scheduled_conference;
 extern test_suite_t local_conference_test_suite_end_to_end_encryption_scheduled_conference_audio_only_participant;
+extern test_suite_t local_conference_test_suite_end_to_end_encryption_scheduled_conference_with_chat;
 extern test_suite_t local_conference_test_suite_end_to_end_encryption_impromptu_conference;
+#endif // HAVE_EKT_SERVER_PLUGIN
 extern test_suite_t clonable_object_test_suite;
 extern test_suite_t conference_event_test_suite;
 extern test_suite_t conference_test_suite;
@@ -87,11 +90,15 @@ extern test_suite_t secure_group_chat_exhume_test_suite;
 extern test_suite_t secure_message_test_suite;
 extern test_suite_t secure_message2_test_suite;
 extern test_suite_t secure_group_chat_migration_test_suite;
+extern test_suite_t secure_group_chat_multialgos_test_suite;
 extern test_suite_t ephemeral_group_chat_test_suite;
 extern test_suite_t ephemeral_group_chat_basic_test_suite;
 extern test_suite_t log_collection_test_suite;
 extern test_suite_t message_test_suite;
 extern test_suite_t rtt_message_test_suite;
+#ifdef HAVE_BAUDOT
+extern test_suite_t baudot_message_test_suite;
+#endif /* HAVE_BAUDOT */
 extern test_suite_t session_timers_test_suite;
 extern test_suite_t multi_call_test_suite;
 extern test_suite_t multicast_call_test_suite;
@@ -155,6 +162,7 @@ extern test_suite_t local_conference_test_suite_scheduled_conference_basic;
 extern test_suite_t local_conference_test_suite_scheduled_conference_advanced;
 extern test_suite_t local_conference_test_suite_scheduled_conference_audio_only_participant;
 extern test_suite_t local_conference_test_suite_scheduled_conference_with_screen_sharing;
+extern test_suite_t local_conference_test_suite_scheduled_conference_with_chat;
 extern test_suite_t local_conference_test_suite_scheduled_ice_conference;
 extern test_suite_t local_conference_test_suite_impromptu_conference;
 extern test_suite_t local_conference_test_suite_encrypted_impromptu_conference;
@@ -166,6 +174,9 @@ extern test_suite_t call_race_conditions_suite;
 extern test_suite_t mwi_test_suite;
 extern test_suite_t bearer_auth_test_suite;
 extern test_suite_t call_twisted_cases_suite;
+extern test_suite_t http_client_test_suite;
+extern test_suite_t turn_server_test_suite;
+extern test_suite_t refer_test_suite;
 
 #ifdef VCARD_ENABLED
 extern test_suite_t vcard_test_suite;
@@ -242,32 +253,14 @@ extern const char *file_transfer_url_digest_auth_any_domain;
 extern const char *file_transfer_url_small_files;
 extern const char *file_transfer_get_proxy;
 extern const char *file_transfer_get_proxy_external_domain;
-extern const char *lime_server_c25519_url;
-extern const char *lime_server_c448_url;
-extern const char *lime_server_c25519k512_url;
-extern const char *lime_server_any_domain_c25519_url;
-extern const char *lime_server_any_domain_c448_url;
-extern const char *lime_server_any_domain_c25519k512_url;
 
-extern const char *lime_server_c25519_tlsauth_opt_url;
-extern const char *lime_server_c448_tlsauth_opt_url;
-extern const char *lime_server_c25519k512_tlsauth_opt_url;
-
-extern const char *lime_server_c25519_tlsauth_req_url;
-extern const char *lime_server_c448_tlsauth_req_url;
-extern const char *lime_server_c25519k512_tlsauth_req_url;
-
-extern const char *lime_server_c25519_dual_auth_url;
-extern const char *lime_server_c448_dual_auth_url;
-extern const char *lime_server_c25519k512_dual_auth_url;
-
-extern const char *lime_server_c25519_external_url;
-extern const char *lime_server_c448_external_url;
-extern const char *lime_server_c25519k512_external_url;
-
-extern const char *lime_server_c25519_external_dual_auth_url;
-extern const char *lime_server_c448_external_dual_auth_url;
-extern const char *lime_server_c25519k512_external_dual_auth_url;
+extern const char *lime_server_url;
+extern const char *lime_server_any_domain_url;
+extern const char *lime_server_tlsauth_opt_url;
+extern const char *lime_server_tlsauth_req_url;
+extern const char *lime_server_dual_auth_url;
+extern const char *lime_server_external_url;
+extern const char *lime_server_external_dual_auth_url;
 
 extern bool_t liblinphone_tester_keep_uuid;
 extern bool_t liblinphone_tester_tls_support_disabled;
@@ -527,6 +520,8 @@ typedef struct _stats {
 
 	int number_of_chat_room_subject_changed;
 
+	int number_of_active_speaker_participant_device_changed;
+	int number_of_allowed_participant_list_changed;
 	int number_of_participants_added;
 	int number_of_participant_role_changed;
 	int number_of_participant_admin_statuses_changed;
@@ -539,18 +534,31 @@ typedef struct _stats {
 	int number_of_participant_devices_removed;
 	int number_of_participant_devices_screen_sharing_enabled;
 	int number_of_participant_devices_screen_sharing_disabled;
+	int number_of_participant_devices_joining_request;
 	int number_of_conference_full_state_received;
 	int number_of_participant_devices_media_capability_changed;
+	int number_of_conference_participant_devices_scheduled_for_joining;
+	int number_of_conference_participant_devices_pending;
+	int number_of_conference_participant_devices_on_hold;
+	int number_of_conference_participant_devices_requesting_to_join;
+	int number_of_conference_participant_devices_alerting;
+	int number_of_conference_participant_devices_present;
+	int number_of_conference_participant_devices_scheduled_for_leaving;
+	int number_of_conference_participant_devices_leaving;
+	int number_of_conference_participant_devices_left;
+	int number_of_conference_participant_devices_muted_by_focus;
+	int number_of_participant_state_changed;
+
 	int number_of_participant_devices_scheduled_for_joining;
 	int number_of_participant_devices_pending;
 	int number_of_participant_devices_on_hold;
+	int number_of_participant_devices_requesting_to_join;
 	int number_of_participant_devices_alerting;
-	int number_of_participant_devices_joined;
+	int number_of_participant_devices_present;
 	int number_of_participant_devices_scheduled_for_leaving;
 	int number_of_participant_devices_leaving;
 	int number_of_participant_devices_left;
 	int number_of_participant_devices_muted_by_focus;
-	int number_of_participant_state_changed;
 
 	int number_of_SecurityLevelDowngraded;
 	int number_of_ParticipantMaxDeviceCountExceeded;
@@ -588,6 +596,8 @@ typedef struct _stats {
 	int number_of_ConferenceSchedulerStateError;
 	int number_of_ConferenceSchedulerInvitationsSent;
 
+	int number_of_ConferenceInformationUpdated;
+
 	int number_of_LinphoneMagicSearchResultReceived;
 	int number_of_LinphoneMagicSearchLdapHaveMoreResults;
 
@@ -596,11 +606,20 @@ typedef struct _stats {
 	int number_of_old_LinphoneMessageWaitingIndicationVoice;
 	int number_of_new_urgent_LinphoneMessageWaitingIndicationVoice;
 	int number_of_old_urgent_LinphoneMessageWaitingIndicationVoice;
+
+#ifdef HAVE_BAUDOT
+	int number_of_LinphoneBaudotDetected;
+	int number_of_LinphoneBaudotEuropeDetected;
+	int number_of_LinphoneBaudotUsDetected;
+#endif /* HAVE_BAUDOT */
+
+	int number_of_out_of_dialog_refer_received;
 } stats;
 
 typedef enum _LinphoneCoreManagerSubscribePolicy {
 	AcceptSubscription,
 	DenySubscription,
+	RetainSubscription,
 	DoNothingWithSubscription
 } LinphoneCoreManagerSubscribePolicy;
 
@@ -628,6 +647,7 @@ typedef struct _LinphoneCoreManager {
 	bool_t main_core;
 	bool_t skip_lime_user_creation_asserts;
 	bool_t lime_failure;
+	bool_t registration_failure;
 	LinphoneCoreManagerSubscribePolicy subscribe_policy;
 	LinphoneCoreManagerPublishPolicy publish_policy;
 	int subscription_received;
@@ -947,6 +967,9 @@ void check_stream_encryption(LinphoneCall *call);
 int get_stream_stop_count(LinphoneCall *call);
 bool_t search_matching_srtp_suite(LinphoneCoreManager *caller_mgr, LinphoneCoreManager *callee_mgr);
 
+void group_chat_with_imdn_sent_only_to_sender_base(bool_t add_participant,
+                                                   bool_t enable_lime,
+                                                   bool_t participant_goes_offline);
 LinphoneChatRoom *create_chat_room_client_side(bctbx_list_t *lcs,
                                                LinphoneCoreManager *lcm,
                                                stats *initialStats,
@@ -998,7 +1021,8 @@ void conference_scheduler_invitations_sent(LinphoneConferenceScheduler *schedule
 int find_matching_participant_info(const LinphoneParticipantInfo *info1, const LinphoneParticipantInfo *info2);
 void check_conference_info_against_db(LinphoneCoreManager *mgr,
                                       LinphoneAddress *confAddr,
-                                      const LinphoneConferenceInfo *info1);
+                                      const LinphoneConferenceInfo *info1,
+                                      bool_t skip_participant_info);
 
 void check_conference_info_in_db(LinphoneCoreManager *mgr,
                                  const char *uid,
@@ -1096,7 +1120,8 @@ LinphoneStatus remove_participant_from_local_conference(bctbx_list_t *lcs,
 LinphoneStatus terminate_conference(bctbx_list_t *lcs,
                                     LinphoneCoreManager *conf_mgr,
                                     LinphoneConference *conference,
-                                    LinphoneCoreManager *focus_mgr);
+                                    LinphoneCoreManager *focus_mgr,
+                                    bool_t participants_exit_conference);
 bctbx_list_t *terminate_participant_call(bctbx_list_t *participants,
                                          LinphoneCoreManager *conf_mgr,
                                          LinphoneCoreManager *participant_mgr);
@@ -1171,15 +1196,26 @@ extern MSSndCardDesc dummy_capture_test_snd_card_desc;
  * the encryption engine (only if the given url is different than the current one). It will thus parse
  * again the curve setting that is changed BEFORE.
  */
-void set_lime_server_and_curve(const int curveId, LinphoneCoreManager *manager);
-void legacy_set_lime_server_and_curve(const int curveId,
+typedef enum _LinphoneTesterLimeAlgo {
+	UNSET = 0,
+	C25519,
+	C448,
+	C25519K512,
+	C25519MLK512,
+	C448MLK1024
+} LinphoneTesterLimeAlgo;
+const char *limeAlgoEnum2String(const LinphoneTesterLimeAlgo curveId);
+void set_lime_server_and_curve(const LinphoneTesterLimeAlgo curveId, LinphoneCoreManager *manager);
+void legacy_set_lime_server_and_curve(const LinphoneTesterLimeAlgo curveId,
                                       LinphoneCoreManager *manager); // Set the lime server url in the [lime] section so
                                                                      // it is setup at core level not account
-void set_lime_server_and_curve_list(const int curveId, bctbx_list_t *managerList);
-void set_lime_server_and_curve_list_tls(const int curveId,
+void set_lime_server_and_curve_list(const LinphoneTesterLimeAlgo curveId, bctbx_list_t *managerList);
+void set_lime_server_and_curve_list_tls(const LinphoneTesterLimeAlgo curveId,
                                         bctbx_list_t *managerList,
                                         bool_t tls_auth_server,
                                         bool_t required);
+
+void aggregated_imdns_in_group_chat_base(const LinphoneTesterLimeAlgo curveId);
 
 bool is_filepath_encrypted(const char *filepath);
 typedef struct _LinphoneAccountCreatorStats {
@@ -1193,7 +1229,7 @@ void account_creator_reset_cb_done(LinphoneAccountCreatorCbs *cbs);
 void lime_delete_DRSessions(const char *limedb, const char *requestOption);
 void lime_setback_usersUpdateTs(const char *limedb, int days);
 uint64_t lime_get_userUpdateTs(const char *limedb);
-char *lime_get_userIk(LinphoneCoreManager *mgr, char *gruu);
+char *lime_get_userIk(LinphoneCoreManager *mgr, char *gruu, uint8_t curveId);
 bool_t liblinphone_tester_is_lime_PQ_available(void);
 void delete_all_in_zrtp_table(const char *zrtpdb);
 
@@ -1218,6 +1254,49 @@ int liblinphone_tester_check_recorded_audio(const char *hellopath, const char *r
 
 /* returns a CPU bogomips indication. Only supported for linux.*/
 float liblinphone_tester_get_cpu_bogomips(void);
+
+/**
+ * @brief liblinphone_tester_audio_device_name_match compare device name with string
+ *
+ * @param audio_device the audio device to compare @notnil
+ * @param name the name to find in device name
+ * @return the result of strcmp
+ */
+int liblinphone_tester_audio_device_name_match(const LinphoneAudioDevice *audio_device, const char *name);
+
+/**
+ * @brief liblinphone_tester_audio_device_match compare device ids between 2 devices
+ *
+ * @param a the first device
+ * @param b the second device
+ * @return the result of strcmp
+ */
+int liblinphone_tester_audio_device_match(const LinphoneAudioDevice *a, LinphoneAudioDevice *b);
+
+/**
+ * @brief liblinphone_tester_find_changing_devices Find the device that is missed/new into 2 lists.
+ *
+ * @param a first list to check. @maybenil
+ * @param b second list to check. @maybenil
+ * @param is_new TRUE if the changed device is new.
+ * @return the device that changed or NULL if no change. Set is_new if the device has been
+ * connected. @tobefreed @maybenil
+ */
+bctbx_list_t *liblinphone_tester_find_changing_devices(bctbx_list_t *a, bctbx_list_t *b, bool_t *is_new);
+
+/**
+ * @brief liblinphone_tester_sound_detection Check sounds between 2 Core on 200ms and exit the function on detection.
+ *
+ * @param a the first core manager to retrieve current call and make wait loop @notnil
+ * @param b the second core manager to retrieve current call and make wait loop @notnil
+ * @param timeout_ms timeout in ms
+ * @param log_tag Use this tag to monitor level in logs. If NULL, log is switched off @maybenil
+ * @return -1 if timed out else 0.
+ */
+int liblinphone_tester_sound_detection(LinphoneCoreManager *a,
+                                       LinphoneCoreManager *b,
+                                       int timeout_ms,
+                                       const char *log_tag);
 
 #ifdef __cplusplus
 };

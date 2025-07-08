@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010-2022 Belledonne Communications SARL.
+ * Copyright (c) 2010-2025 Belledonne Communications SARL.
  *
  * This file is part of Liblinphone
  * (see https://gitlab.linphone.org/BC/public/liblinphone).
@@ -70,6 +70,7 @@ void linphone_call_notify_camera_not_working(LinphoneCall *call, const char *cam
 void linphone_call_notify_video_display_error_occurred(LinphoneCall *call, int error_code);
 void linphone_call_notify_audio_device_changed(LinphoneCall *call, LinphoneAudioDevice *audioDevice);
 void linphone_call_notify_remote_recording(LinphoneCall *call, bool_t recording);
+void linphone_call_notify_baudot_detected(LinphoneCall *call, LinphoneBaudotStandard standard);
 
 LinphoneCall *linphone_call_new_outgoing(struct _LinphoneCore *lc,
                                          const LinphoneAddress *from,
@@ -85,7 +86,7 @@ LINPHONE_PUBLIC LinphoneCallLog *
 linphone_call_log_new(LinphoneCore *core, LinphoneCallDir dir, const LinphoneAddress *from, const LinphoneAddress *to);
 void linphone_call_log_set_call_id(LinphoneCallLog *cl, const char *call_id);
 
-LinphonePrivate::SalCallOp *linphone_call_get_op(const LinphoneCall *call);
+LINPHONE_PUBLIC LinphonePrivate::SalCallOp *linphone_call_get_op(const LinphoneCall *call);
 
 // FIXME: Remove this declaration, use LINPHONE_PUBLIC as ugly workaround, already defined in tester_utils.h
 LINPHONE_PUBLIC LinphoneAccount *linphone_call_get_dest_account(const LinphoneCall *call);
@@ -171,6 +172,7 @@ void _linphone_core_uninit(LinphoneCore *lc);
 void linphone_auth_info_write_config(LpConfig *config, LinphoneAuthInfo *auth_info, int pos);
 LinphoneAuthInfo *linphone_auth_info_new_from_config_file(LpConfig *config, int pos);
 void linphone_core_write_auth_info(LinphoneCore *lc, LinphoneAuthInfo *ai);
+void linphone_core_write_auth_infos(LinphoneCore *lc);
 void linphone_core_stop_tone_manager(LinphoneCore *lc);
 LinphoneAuthInfo *_linphone_core_find_tls_auth_info(LinphoneCore *lc);
 LinphoneAuthInfo *_linphone_core_find_indexed_tls_auth_info(LinphoneCore *lc, const char *username, const char *domain);
@@ -180,13 +182,20 @@ LinphoneAuthInfo *_linphone_core_find_auth_info(LinphoneCore *lc,
                                                 const char *domain,
                                                 const char *algorithm,
                                                 bool_t ignore_realm);
+const LinphoneAuthInfo *linphone_core_find_auth_info_to_be_replaced(LinphoneCore *lc, const LinphoneAuthInfo *other);
 LinphoneAuthInfo *
 _linphone_core_find_bearer_auth_info(LinphoneCore *lc, const char *realm, const char *username, const char *domain);
-// void linphone_auth_info_fill_belle_sip_event(const LinphoneAuthInfo *auth_info, belle_sip_auth_event *event);
-bool linphone_core_fill_belle_sip_auth_event(LinphoneCore *lc,
-                                             belle_sip_auth_event *event,
-                                             const char *username,
-                                             const char *domain);
+
+enum class AuthStatus {
+	NoAuth, // No authentication is possible at this time.
+	Done,   // Authentication information could be provided.
+	Pending // Authentication information will arrive later.
+};
+
+AuthStatus linphone_core_fill_belle_sip_auth_event(LinphoneCore *lc,
+                                                   belle_sip_auth_event *event,
+                                                   const char *username,
+                                                   const char *domain);
 
 void linphone_core_update_proxy_register(LinphoneCore *lc);
 const char *linphone_core_get_nat_address_resolved(LinphoneCore *lc);
@@ -345,7 +354,7 @@ LinphoneAccount *linphone_proxy_config_get_account(LinphoneProxyConfig *cfg);
 void linphone_account_update(LinphoneAccount *account);
 LinphoneProxyConfig *linphone_account_get_proxy_config(LinphoneAccount *account);
 
-const bctbx_list_t *linphone_core_get_deleted_account_list(const LinphoneCore *lc);
+LINPHONE_PUBLIC const bctbx_list_t *linphone_core_get_deleted_account_list(const LinphoneCore *lc);
 void linphone_core_remove_deleted_account(LinphoneCore *core, LinphoneAccount *account);
 
 LinphoneProxyConfig *linphone_core_lookup_known_proxy(LinphoneCore *lc, const LinphoneAddress *uri);
@@ -401,6 +410,7 @@ void _linphone_proxy_config_unregister(LinphoneProxyConfig *obj);
 
 /* conference */
 LINPHONE_PUBLIC bool_t linphone_participant_preserve_session(const LinphoneParticipant *participant);
+void _linphone_conference_notify_allowed_participant_list_changed(LinphoneConference *conference);
 void _linphone_conference_notify_participant_added(LinphoneConference *conference, LinphoneParticipant *participant);
 void _linphone_conference_notify_participant_removed(LinphoneConference *conference,
                                                      const LinphoneParticipant *participant);
@@ -408,6 +418,8 @@ void _linphone_conference_notify_participant_device_added(LinphoneConference *co
                                                           LinphoneParticipantDevice *participant_device);
 void _linphone_conference_notify_participant_device_removed(LinphoneConference *conference,
                                                             const LinphoneParticipantDevice *participant_device);
+void _linphone_conference_notify_participant_device_joining_request(LinphoneConference *conference,
+                                                                    LinphoneParticipantDevice *participant_device);
 void _linphone_conference_notify_participant_role_changed(LinphoneConference *conference,
                                                           const LinphoneParticipant *participant);
 void _linphone_conference_notify_participant_admin_status_changed(LinphoneConference *conference,
@@ -461,11 +473,14 @@ void _linphone_participant_device_notify_video_display_error_occurred(LinphonePa
 
 LINPHONE_PUBLIC void linphone_participant_device_set_state(LinphoneParticipantDevice *participant_device,
                                                            LinphoneParticipantDeviceState state);
+LINPHONE_PUBLIC LinphoneCore *linphone_participant_device_get_core(const LinphoneParticipantDevice *participant_device);
 
 /*account*/
 void _linphone_account_notify_registration_state_changed(LinphoneAccount *account,
                                                          LinphoneRegistrationState state,
                                                          const char *message);
+void _linphone_account_notify_conference_information_updated(LinphoneAccount *account, const bctbx_list_t *infos);
+
 /*alerts*/
 void linphone_core_notify_alert(LinphoneCore *lc, LinphoneAlert *alert);
 LINPHONE_PUBLIC void linphone_alert_notify_on_terminated(LinphoneAlert *alert);
@@ -554,6 +569,8 @@ void _linphone_chat_message_clear_callbacks(LinphoneChatMessage *msg);
 
 void _linphone_magic_search_notify_search_results_received(LinphoneMagicSearch *magic_search);
 void _linphone_magic_search_notify_ldap_have_more_results(LinphoneMagicSearch *magic_search, LinphoneLdap *ldap);
+void _linphone_magic_search_notify_more_results_available(LinphoneMagicSearch *magic_search,
+                                                          LinphoneMagicSearchSource source);
 
 const LinphoneParticipantImdnState *
 _linphone_participant_imdn_state_from_cpp_obj(const LinphonePrivate::ParticipantImdnState &state);
@@ -631,7 +648,6 @@ void linphone_chat_message_set_message_state_changed_cb(LinphoneChatMessage *msg
 void linphone_chat_message_set_message_state_changed_cb_user_data(LinphoneChatMessage *msg, void *user_data);
 void *linphone_chat_message_get_message_state_changed_cb_user_data(LinphoneChatMessage *msg);
 
-bool_t linphone_core_tone_indications_enabled(LinphoneCore *lc);
 const char *linphone_core_create_uuid(LinphoneCore *lc);
 void linphone_configure_op(LinphoneCore *lc,
                            LinphonePrivate::SalOp *op,
@@ -777,6 +793,21 @@ MsZrtpCryptoTypesCount linphone_core_get_zrtp_auth_suites(LinphoneCore *lc,
 MsZrtpCryptoTypesCount linphone_core_get_zrtp_sas_suites(LinphoneCore *lc,
                                                          MSZrtpSasType sasTypes[MS_MAX_ZRTP_CRYPTO_TYPES]);
 
+/**
+ * Tells whether the security alert feature is enabled for this #LinphoneCore object.
+ * By default, the security alert is enabled.
+ * @param core The #LinphoneCore object. @notnil
+ * @return TRUE if the security alert feature is enabled.
+ */
+bool_t linphone_core_security_alert_enabled(const LinphoneCore *core);
+
+/**
+ * Enables the security alert feature.
+ * @param core The #LinphoneCore object @notnil
+ * @param enable A boolean value telling whether to enable or disable the security alert feature.
+ */
+void linphone_core_enable_security_alert(LinphoneCore *core, bool_t enable);
+
 LinphoneImEncryptionEngineCbs *linphone_im_encryption_engine_cbs_new(void);
 
 LinphoneRange *linphone_range_new(void);
@@ -864,7 +895,10 @@ void linphone_core_notify_account_removed(LinphoneCore *lc, LinphoneAccount *acc
 /*
  * return true if at least a registered vtable has a cb for dtmf received*/
 bool_t linphone_core_dtmf_received_has_listener(const LinphoneCore *lc);
-void linphone_core_notify_refer_received(LinphoneCore *lc, const char *refer_to);
+void linphone_core_notify_refer_received(LinphoneCore *lc,
+                                         const LinphoneAddress *referToAddr,
+                                         const LinphoneHeaders *customHeaders,
+                                         const LinphoneContent *content);
 void linphone_core_notify_buddy_info_updated(LinphoneCore *lc, LinphoneFriend *lf);
 void linphone_core_notify_transfer_state_changed(LinphoneCore *lc,
                                                  LinphoneCall *transferred,
@@ -925,6 +959,9 @@ void set_playback_gain_db(AudioStream *st, float gain);
 LinphoneMediaDirection media_direction_from_sal_stream_dir(SalStreamDir dir);
 LINPHONE_PUBLIC SalStreamDir sal_dir_from_call_params_dir(LinphoneMediaDirection cpdir);
 
+LINPHONE_PUBLIC const char *sal_call_get_local_tag(LinphonePrivate::SalOp *op);
+LINPHONE_PUBLIC const char *sal_call_get_remote_tag(LinphonePrivate::SalOp *op);
+
 /*****************************************************************************
  * LINPHONE CONTENT PRIVATE ACCESSORS                                        *
  ****************************************************************************/
@@ -947,6 +984,9 @@ LINPHONE_PUBLIC void linphone_core_set_default_proxy_index(LinphoneCore *core, i
 int linphone_core_get_default_proxy_config_index(LinphoneCore *lc);
 LINPHONE_PUBLIC void linphone_core_set_default_account_index(LinphoneCore *core, int index);
 int linphone_core_get_default_account_index(LinphoneCore *lc);
+
+LINPHONE_PUBLIC bool_t linphone_core_get_add_admin_information_to_contact(const LinphoneCore *lc);
+LINPHONE_PUBLIC void linphone_core_set_add_admin_information_to_contact(LinphoneCore *lc, bool_t enabled);
 
 char *linphone_presence_model_to_xml(LinphonePresenceModel *model);
 
@@ -1008,10 +1048,6 @@ LINPHONE_PUBLIC void linphone_conference_info_set_ics_sequence(LinphoneConferenc
 // FIXME: Remove this declaration, use LINPHONE_PUBLIC as ugly workaround, already defined in tester_utils.h
 LINPHONE_PUBLIC unsigned int linphone_conference_info_get_ics_sequence(const LinphoneConferenceInfo *conference_info);
 LINPHONE_PUBLIC const char *linphone_conference_info_get_utf8_ics_uid(const LinphoneConferenceInfo *conference_info);
-// FIXME: Remove this declaration, use LINPHONE_PUBLIC as ugly workaround, already defined in tester_utils.h
-LINPHONE_PUBLIC void linphone_conference_info_set_ics_uid(LinphoneConferenceInfo *conference_info, const char *uid);
-// FIXME: Remove this declaration, use LINPHONE_PUBLIC as ugly workaround, already defined in tester_utils.h
-LINPHONE_PUBLIC const char *linphone_conference_info_get_ics_uid(const LinphoneConferenceInfo *conference_info);
 // FIXME: Remove this declaration, use LINPHONE_PUBLIC as ugly workaround, already defined in tester_utils.h
 LINPHONE_PUBLIC void linphone_conference_info_set_state(LinphoneConferenceInfo *conference_info,
                                                         LinphoneConferenceInfoState state);

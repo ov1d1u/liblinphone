@@ -73,7 +73,6 @@ public:
 	friend void ::linphone_core_remove_friend(LinphoneCore *lc, LinphoneFriend *lf);
 	friend void ::linphone_friend_add_incoming_subscription(LinphoneFriend *lf, LinphonePrivate::SalOp *op);
 	friend const bctbx_list_t * ::linphone_friend_get_addresses(const LinphoneFriend *lf);
-	friend LinphoneFriendList * ::linphone_friend_get_friend_list(const LinphoneFriend *lf);
 	friend bctbx_list_t * ::linphone_friend_get_insubs(const LinphoneFriend *lf);
 	friend SalPresenceOp * ::linphone_friend_get_outsub(const LinphoneFriend *lf);
 	friend int ::linphone_friend_get_rc_index(const LinphoneFriend *lf);
@@ -111,6 +110,7 @@ public:
 	// Getters
 	const std::shared_ptr<Address> getAddress() const;
 	const std::list<std::shared_ptr<Address>> &getAddresses() const;
+	const bctbx_list_t *getAddressesCList() const;
 	int getCapabilities() const;
 	float getCapabilityVersion(LinphoneFriendCapability capability) const;
 	LinphoneConsolidatedPresence getConsolidatedPresence() const;
@@ -124,7 +124,9 @@ public:
 	std::list<std::shared_ptr<FriendPhoneNumber>> getPhoneNumbersWithLabel() const;
 	const std::string &getPhoto() const;
 	const std::shared_ptr<PresenceModel> getPresenceModel() const;
-	const std::shared_ptr<PresenceModel> getPresenceModelForUriOrTel(const std::string &uriOrTel) const;
+	const std::shared_ptr<PresenceModel> &getPresenceModelForUriOrTel(const std::string &uriOrTel) const;
+	const std::shared_ptr<PresenceModel> &
+	getPresenceModelForAddress(const std::shared_ptr<const Address> &address) const;
 	const std::string &getRefKey() const;
 	bool getStarred() const;
 	LinphoneSubscriptionState getSubscriptionState() const;
@@ -148,6 +150,7 @@ public:
 	bool hasCapabilityWithVersionOrMore(const LinphoneFriendCapability capability, float version) const;
 	bool hasPhoneNumber(const std::string &searchedPhoneNumber) const;
 	bool inList() const;
+	FriendList *getFriendList() const;
 	bool isPresenceReceived() const;
 	void remove();
 	void removeAddress(const std::shared_ptr<const Address> &address);
@@ -178,7 +181,6 @@ private:
 	void removeIncomingSubscription(SalOp *op);
 	void saveInDb();
 	const std::string &sipUriToPhoneNumber(const std::string &uri) const;
-	void syncBctbxAddresses() const;
 	void unsubscribe();
 	void updateSubscribes(bool onlyWhenRegistered);
 
@@ -188,16 +190,16 @@ private:
 	static LinphoneSecurityLevel getSecurityLevelFromChatRoomSecurityLevel(AbstractChatRoom::SecurityLevel level);
 	static LinphoneSecurityLevel getSecurityLevelForDevices(const std::list<std::shared_ptr<FriendDevice>> &devices);
 
-	LinphoneSubscribePolicy mSubscribePolicy = LinphoneSPAccept;
+	LinphoneSubscribePolicy mSubscribePolicy = LinphoneSPDeny;
 	LinphoneSubscriptionState mOutSubState;
-	bool mSubscribe = true;
+	bool mSubscribe = false;
 	bool mSubscribeActive = false;
 	bool mIsStarred = false;
 	bool mCommit = false;
 	bool mIncSubscribePending = false;
 	bool mPresenceReceived = false;
 	bool mInitialSubscribesSent = false; /* Used to know if initial subscribe message was sent or not. */
-	std::shared_ptr<Address> mUri = nullptr;
+	std::shared_ptr<Address> mUri;
 	std::string mNativeUri;
 	std::string mRefKey;
 	long long mStorageId = -1;
@@ -211,11 +213,10 @@ private:
 	mutable std::map<std::string, std::string> mSipUriToPhoneNumberMap;
 
 	BuddyInfo *mInfo = nullptr;
-	std::shared_ptr<Vcard> mVcard = nullptr;
+	std::shared_ptr<Vcard> mVcard;
 	FriendList *mFriendList = nullptr;
 
-	mutable std::list<std::shared_ptr<Address>> mAddresses;
-	mutable bctbx_list_t *mBctbxAddresses = nullptr; // Kept in sync with mAddresses for C compatibility
+	mutable ListHolder<Address> mAddresses;
 	mutable std::string mName;
 	mutable std::list<std::shared_ptr<FriendDevice>> mDevices;
 };

@@ -92,7 +92,7 @@ bool BasicChatRoom::isReadOnly() const {
 	return false;
 }
 
-const std::shared_ptr<ConferenceParams> &BasicChatRoom::getCurrentParams() const {
+std::shared_ptr<ConferenceParams> BasicChatRoom::getCurrentParams() const {
 	shared_ptr<Call> call = getCall();
 	if (call && call->getCurrentParams()) {
 		mParams->getChatParams()->setRealTimeText(call->getCurrentParams()->realtimeTextEnabled());
@@ -104,7 +104,7 @@ void BasicChatRoom::invalidateAccount() {
 	mParams->setAccount(nullptr);
 }
 
-const std::shared_ptr<Account> BasicChatRoom::getAccount() {
+std::shared_ptr<Account> BasicChatRoom::getAccount() {
 	auto account = mParams->getAccount();
 	if (!account) {
 		mParams->setAccount(getCore()->findAccountByIdentityAddress(mConferenceId.getLocalAddress()));
@@ -114,6 +114,17 @@ const std::shared_ptr<Account> BasicChatRoom::getAccount() {
 
 const ConferenceId &BasicChatRoom::getConferenceId() const {
 	return mConferenceId;
+}
+
+void BasicChatRoom::setConferenceId(const ConferenceId &conferenceId) {
+	mConferenceId = conferenceId;
+}
+
+std::optional<std::reference_wrapper<const std::string>> BasicChatRoom::getIdentifier() const {
+	if (mState == ConferenceInterface::State::Instantiated) {
+		return std::nullopt;
+	}
+	return mConferenceId.getIdentifier();
 }
 
 ConferenceInterface::State BasicChatRoom::getState() const {
@@ -127,28 +138,32 @@ void BasicChatRoom::setState(ConferenceInterface::State newState) {
 	}
 }
 
-void BasicChatRoom::setSubject(const string &subject) {
-	mParams->setSubject(subject);
-}
-
 void BasicChatRoom::setUtf8Subject(const string &subject) {
 	mParams->setUtf8Subject(subject);
 }
 
-const std::string &BasicChatRoom::getSubject() const {
-	return mParams->getSubject();
+const std::string &BasicChatRoom::getSubjectUtf8() const {
+	return mParams->getUtf8Subject();
 }
 
 bool BasicChatRoom::isMe(const std::shared_ptr<Address> &address) const {
 	return address->weakEqual(*mMe->getAddress());
 }
 
-const std::shared_ptr<Participant> BasicChatRoom::getMe() const {
+std::shared_ptr<Participant> BasicChatRoom::getMe() const {
 	return mMe;
 }
 
-const std::list<std::shared_ptr<Participant>> BasicChatRoom::getParticipants() const {
+std::list<std::shared_ptr<Participant>> BasicChatRoom::getParticipants() const {
 	return mParticipants;
+}
+
+std::list<std::shared_ptr<Address>> BasicChatRoom::getParticipantAddresses() const {
+	list<std::shared_ptr<Address>> addresses;
+	for (auto &participant : mParticipants) {
+		addresses.push_back(participant->getAddress());
+	}
+	return addresses;
 }
 
 LINPHONE_END_NAMESPACE

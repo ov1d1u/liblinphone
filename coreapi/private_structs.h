@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010-2022 Belledonne Communications SARL.
+ * Copyright (c) 2010-2024 Belledonne Communications SARL.
  *
  * This file is part of Liblinphone
  * (see https://gitlab.linphone.org/BC/public/liblinphone).
@@ -266,15 +266,6 @@ struct _EchoTester {
 
 BELLE_SIP_DECLARE_VPTR_NO_EXPORT(LinphoneContent);
 
-struct _LinphoneBuffer {
-	belle_sip_object_t base;
-	void *user_data;
-	uint8_t *content; /**< A pointer to the buffer content */
-	size_t size;      /**< The size of the buffer content */
-};
-
-BELLE_SIP_DECLARE_VPTR_NO_EXPORT(LinphoneBuffer);
-
 struct _LinphoneImNotifPolicy {
 	belle_sip_object_t base;
 	void *user_data;
@@ -477,6 +468,7 @@ class Core;
 	void *data;                                                                                                        \
 	char *play_file;                                                                                                   \
 	char *rec_file;                                                                                                    \
+	char *on_hold_music_file;                                                                                          \
 	uint64_t prevtime_ms;                                                                                              \
 	int audio_bw;                                                                                                      \
 	void *video_window_id;                                                                                             \
@@ -516,7 +508,6 @@ class Core;
 	LinphoneTunnel *tunnel;                                                                                            \
 	char *device_id;                                                                                                   \
 	char *friends_db_file;                                                                                             \
-	belle_http_request_listener_t *provisioning_http_listener;                                                         \
 	belle_http_request_listener_t *base_contacts_list_http_listener;                                                   \
 	LinphoneFriendList *base_contacts_list_for_synchronization;                                                        \
 	MSList *tones;                                                                                                     \
@@ -551,7 +542,8 @@ class Core;
 	unsigned long iterate_thread_id;                                                                                   \
 	bool_t record_aware;                                                                                               \
 	bool_t auto_send_ringing;                                                                                          \
-	int number_of_duplicated_messages;
+	int number_of_duplicated_messages;                                                                                 \
+	bool_t goog_remb_enabled;
 
 #define LINPHONE_CORE_STRUCT_FIELDS                                                                                    \
 	LINPHONE_CORE_STRUCT_BASE_FIELDS                                                                                   \

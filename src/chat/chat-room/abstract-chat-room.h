@@ -116,6 +116,7 @@ public:
 
 	virtual const std::shared_ptr<Address> &getPeerAddress() const = 0;
 	virtual const std::shared_ptr<Address> &getLocalAddress() const = 0;
+	virtual std::optional<std::reference_wrapper<const std::string>> getIdentifier() const = 0;
 
 	virtual time_t getCreationTime() const = 0;
 	virtual time_t getLastUpdateTime() const = 0;
@@ -182,7 +183,7 @@ public:
 	                                                          const std::shared_ptr<const EventLog> &from,
 	                                                          LinphoneSearchDirection direction) const = 0;
 
-	virtual void sendPendingMessages(){};
+	virtual void sendPendingMessages() {};
 
 	virtual void markAsRead() = 0;
 	virtual void enableEphemeral(bool ephem, bool updateDb) = 0;
@@ -193,16 +194,17 @@ public:
 	virtual AbstractChatRoom::EphemeralMode getEphemeralMode() const = 0;
 	virtual bool ephemeralSupportedByAllParticipants() const = 0;
 
-	virtual const std::shared_ptr<ConferenceParams> &getCurrentParams() const = 0;
+	virtual std::shared_ptr<ConferenceParams> getCurrentParams() const = 0;
 
 	virtual bool isSubscriptionUnderWay() const = 0;
 
 	virtual bool isMe(const std::shared_ptr<Address> &address) const = 0;
-	virtual const std::shared_ptr<Participant> getMe() const = 0;
+	virtual std::shared_ptr<Participant> getMe() const = 0;
 
-	virtual const std::shared_ptr<Address> getConferenceAddress() const = 0;
-	virtual const std::shared_ptr<Participant> findParticipant(const std::shared_ptr<Address> &address) const = 0;
-	virtual const std::list<std::shared_ptr<Participant>> getParticipants() const = 0;
+	virtual std::shared_ptr<Address> getConferenceAddress() const = 0;
+	virtual std::shared_ptr<Participant> findParticipant(const std::shared_ptr<Address> &address) const = 0;
+	virtual std::list<std::shared_ptr<Participant>> getParticipants() const = 0;
+	virtual std::list<std::shared_ptr<Address>> getParticipantAddresses() const = 0;
 
 	virtual bool canHandleParticipants() const = 0;
 	virtual std::shared_ptr<Conference> getConference() const = 0;
@@ -212,10 +214,11 @@ public:
 	virtual void setState(ConferenceInterface::State newState) = 0;
 
 	virtual void invalidateAccount() = 0;
-	virtual const std::shared_ptr<Account> getAccount() = 0;
-	virtual const std::string &getSubject() const = 0;
-	virtual void setSubject(const std::string &subject) = 0;
+	virtual std::shared_ptr<Account> getAccount() = 0;
+	virtual const std::string &getSubjectUtf8() const = 0;
 	virtual void setUtf8Subject(const std::string &subject) = 0;
+	void setSubject(const std::string &subject);
+	const std::string &getSubject() const;
 
 	virtual uint32_t getChar() = 0;
 	virtual std::shared_ptr<Call> getCall() const = 0;
@@ -241,6 +244,7 @@ public:
 
 	virtual LinphoneReason onSipMessageReceived(SalOp *op, const SalMessage *message) = 0;
 	virtual void onChatMessageReceived(const std::shared_ptr<ChatMessage> &chatMessage) = 0;
+	virtual void handleMessageRejected(const std::shared_ptr<ChatMessage> &chatMessage) = 0;
 
 	virtual void addTransientChatMessage(const std::shared_ptr<ChatMessage> &message) = 0;
 	virtual void removeTransientChatMessage(const std::shared_ptr<ChatMessage> &message) = 0;
@@ -249,6 +253,9 @@ public:
 	virtual void setIsEmpty(const bool empty) = 0;
 
 	virtual void realtimeTextReceived(uint32_t character, const std::shared_ptr<Call> &call) = 0;
+#ifdef HAVE_BAUDOT
+	virtual void baudotCharacterReceived(char character, const std::shared_ptr<Call> &call) = 0;
+#endif /* HAVE_BAUDOT */
 	virtual void setCallId(const std::string &value) = 0;
 
 	virtual void notifyAggregatedChatMessages() = 0;
@@ -259,7 +266,7 @@ public:
 
 	virtual Imdn *getImdnHandler() const = 0;
 
-	virtual const std::shared_ptr<ConferenceInfo> getConferenceInfo() const = 0;
+	virtual std::shared_ptr<ConferenceInfo> getConferenceInfo() const = 0;
 
 protected:
 	explicit AbstractChatRoom(const std::shared_ptr<Core> &core);
@@ -267,6 +274,7 @@ protected:
 
 private:
 	mutable bctbx_list_t *composingCAddresses = nullptr;
+	mutable std::string mSubject;
 
 	L_DISABLE_COPY(AbstractChatRoom);
 };
@@ -276,6 +284,13 @@ std::ostream &operator<<(std::ostream &lhs, AbstractChatRoom::Capabilities e);
 std::ostream &operator<<(std::ostream &lhs, AbstractChatRoom::SecurityLevel e);
 
 std::ostream &operator<<(std::ostream &lhs, AbstractChatRoom::EphemeralMode e);
+
+inline std::ostream &operator<<(std::ostream &str, const AbstractChatRoom &chatRoom) {
+	const auto &conferenceAddress = chatRoom.getConferenceAddress();
+	str << "ChatRoom [" << &chatRoom << "] ("
+	    << (conferenceAddress ? conferenceAddress->toString() : std::string("sip:")) << ")";
+	return str;
+}
 
 LINPHONE_END_NAMESPACE
 

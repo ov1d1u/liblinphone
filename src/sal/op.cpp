@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010-2022 Belledonne Communications SARL.
+ * Copyright (c) 2010-2025 Belledonne Communications SARL.
  *
  * This file is part of Liblinphone
  * (see https://gitlab.linphone.org/BC/public/liblinphone).
@@ -18,12 +18,13 @@
  * along with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include "sal/op.h"
+
 #include <cstring>
 
 #include "bellesip_sal/sal_impl.h"
 #include "c-wrapper/internal/c-tools.h"
 #include "content/header/header-param.h"
-#include "sal/op.h"
 
 using namespace std;
 
@@ -52,6 +53,7 @@ SalOp::~SalOp() {
 	if (mPendingServerTransaction) belle_sip_object_unref(mPendingServerTransaction);
 	if (mPendingUpdateServerTransaction) belle_sip_object_unref(mPendingUpdateServerTransaction);
 	if (mEvent) belle_sip_object_unref(mEvent);
+	if (mSupportedHeader) belle_sip_object_unref(mSupportedHeader);
 
 	sal_error_info_reset(&mErrorInfo);
 	sal_error_info_reset(&mReasonErrorInfo);
@@ -570,7 +572,9 @@ belle_sip_request_t *SalOp::buildRequest(const string &method) {
 		belle_sip_message_add_header(BELLE_SIP_MESSAGE(request), BELLE_SIP_HEADER(privacyHeader));
 	}
 
-	if (mRoot->mSupportedHeader) {
+	if (mUseSupportedTags) {
+		if (mSupportedHeader) belle_sip_message_add_header(BELLE_SIP_MESSAGE(request), mSupportedHeader);
+	} else if (mRoot->mSupportedHeader) {
 		belle_sip_message_add_header(BELLE_SIP_MESSAGE(request), mRoot->mSupportedHeader);
 	}
 	return request;
@@ -1036,6 +1040,60 @@ int SalOp::replyMessage(SalReason reason) {
 	return 0;
 }
 
+belle_sip_header_reason_t *SalOp::makeReasonHeader(const SalErrorInfo *info) {
+	if (info && (info->reason != SalReasonNone)) {
+		auto reasonHeader = BELLE_SIP_HEADER_REASON(belle_sip_header_reason_new());
+		belle_sip_header_reason_set_text(reasonHeader, info->status_string);
+		belle_sip_header_reason_set_protocol(reasonHeader, info->protocol);
+		belle_sip_header_reason_set_cause(reasonHeader, info->protocol_code);
+		return reasonHeader;
+	}
+	return nullptr;
+}
+
+int SalOp::replyWithErrorInfo(const SalErrorInfo *info, const SalAddress *redirectionAddr, const time_t expire) {
+	belle_sip_header_contact_t *contactHeader = nullptr;
+	belle_sip_header_retry_after_t *retryAfterHeader = nullptr;
+	int status = info->protocol_code;
+
+	if (info->reason == SalReasonRedirect) {
+		if (redirectionAddr) {
+			status = 302;
+			contactHeader = belle_sip_header_contact_create(BELLE_SIP_HEADER_ADDRESS(redirectionAddr));
+		} else {
+			lError() << "Cannot redirect to null";
+		}
+	}
+	auto transaction = BELLE_SIP_TRANSACTION(mPendingServerTransaction);
+	if (!transaction) transaction = BELLE_SIP_TRANSACTION(mPendingUpdateServerTransaction);
+	if (!transaction) {
+		lError() << __func__ << "(): no pending transaction to decline";
+		return -1;
+	}
+	auto response = createResponseFromRequest(belle_sip_transaction_get_request(transaction), status);
+	auto reasonHeader = makeReasonHeader(info->sub_sei);
+	if (info->retry_after > 0) retryAfterHeader = belle_sip_header_retry_after_create(info->retry_after);
+
+	if (reasonHeader) belle_sip_message_add_header(BELLE_SIP_MESSAGE(response), BELLE_SIP_HEADER(reasonHeader));
+
+	if (contactHeader) belle_sip_message_add_header(BELLE_SIP_MESSAGE(response), BELLE_SIP_HEADER(contactHeader));
+
+	if (expire != 0)
+		belle_sip_message_add_header(BELLE_SIP_MESSAGE(response),
+		                             belle_sip_header_create("Expire", std::to_string(expire).c_str()));
+
+	if (info->warnings) {
+		belle_sip_message_add_header(BELLE_SIP_MESSAGE(response), createWarningHeader(info, getToAddress()));
+	}
+
+	if (retryAfterHeader) belle_sip_message_add_header(BELLE_SIP_MESSAGE(response), BELLE_SIP_HEADER(retryAfterHeader));
+	belle_sip_server_transaction_send_response(BELLE_SIP_SERVER_TRANSACTION(transaction), response);
+	if (info->reason == SalReasonRedirect) {
+		mState = State::Terminating;
+	}
+	return 0;
+}
+
 void SalOp::addMessageAccept(belle_sip_message_t *message) {
 	stringstream ss;
 	ss << "xml/cipher, application/cipher.vnd.gsma.rcs-ft-http+xml";
@@ -1126,6 +1184,17 @@ bool SalOp::runRetryFunc() {
 
 void SalOp::setChannelBankIdentifier(const std::string &identifier) {
 	mChannelBankIdentifier = identifier;
+}
+
+void SalOp::makeSupportedHeader(const std::list<std::string> &supportedTags) {
+	if (mSupportedHeader) {
+		belle_sip_object_unref(mSupportedHeader);
+		mSupportedHeader = nullptr;
+	}
+	mUseSupportedTags = true;
+	if (supportedTags.empty()) return;
+	mSupportedHeader = Sal::createSupportedHeader(supportedTags);
+	if (mSupportedHeader) belle_sip_object_ref(mSupportedHeader);
 }
 
 LINPHONE_END_NAMESPACE

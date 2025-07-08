@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010-2022 Belledonne Communications SARL.
+ * Copyright (c) 2010-2024 Belledonne Communications SARL.
  *
  * This file is part of Liblinphone
  * (see https://gitlab.linphone.org/BC/public/liblinphone).
@@ -346,9 +346,11 @@ typedef struct _LinphoneFriendList LinphoneFriendList;
  * @ingroup buddy_list
  */
 typedef enum _LinphoneFriendListType {
-	LinphoneFriendListTypeDefault = -1,
-	LinphoneFriendListTypeCardDAV = 0,
-	LinphoneFriendListTypeVCard4 = 1
+	LinphoneFriendListTypeDefault = -1,        /**< Default value, used when no other type applies */
+	LinphoneFriendListTypeCardDAV = 0,         /**< Used when list is synchronized with a remote CardDAV server */
+	LinphoneFriendListTypeVCard4 = 1,          /**< Used for simple vCards list remotely provisionned by a server */
+	LinphoneFriendListTypeApplicationCache = 2 /**< Friend list used by app for cache purposes, friends added in
+	                                              this list will be ignored by #LinphoneMagicSearch  */
 } LinphoneFriendListType;
 
 /**
@@ -578,12 +580,6 @@ typedef enum _LinphoneAVPFMode {
 } LinphoneAVPFMode;
 
 /**
- * @brief The object representing a data buffer.
- * @ingroup misc
- **/
-typedef struct _LinphoneBuffer LinphoneBuffer;
-
-/**
  * Consolidated presence information: 'online' means the user is open for communication,
  * 'busy' means the user is open for communication but involved in an other activity,
  * 'do not disturb' means the user is not open for communication, and 'offline' means
@@ -725,7 +721,7 @@ typedef enum _LinphoneLogCollectionState {
 } LinphoneLogCollectionState;
 
 /**
- * @brief Used to notify if log collection upload have been succesfully delivered or not.
+ * @brief Used to notify if log collection upload have been successfully delivered or not.
  * @ingroup initializing
  */
 typedef enum _LinphoneCoreLogCollectionUploadState {
@@ -819,7 +815,12 @@ typedef enum _LinphoneZrtpKeyAgreement {
 	LinphoneZrtpKeyAgreementK448Kyb1024 = 18,
 	LinphoneZrtpKeyAgreementK448Hqc256 = 19,
 	LinphoneZrtpKeyAgreementK255Kyb512Hqc128 = 20,
-	LinphoneZrtpKeyAgreementK448Kyb1024Hqc256 = 21
+	LinphoneZrtpKeyAgreementK448Kyb1024Hqc256 = 21,
+	LinphoneZrtpKeyAgreementMlk1 = 22,
+	LinphoneZrtpKeyAgreementMlk2 = 23,
+	LinphoneZrtpKeyAgreementMlk3 = 24,
+	LinphoneZrtpKeyAgreementK255Mlk512 = 25,
+	LinphoneZrtpKeyAgreementK448Mlk1024 = 26
 } LinphoneZrtpKeyAgreement;
 
 /**
@@ -1354,7 +1355,7 @@ typedef struct _LinphoneRange LinphoneRange;
 
 /**
  * @brief Status code returned by some functions to
- * notify whether the execution has been succesfully
+ * notify whether the execution has been successfully
  * done or not.
  * @ingroup misc
  */
@@ -1381,8 +1382,19 @@ typedef enum _LinphoneMagicSearchSource {
 	    1 << 4, /**< Search from request : it is usually an address built from the request */
 	LinphoneMagicSearchSourceFavoriteFriends = 1 << 5, /**< Search in "starred" friends only */
 	LinphoneMagicSearchSourceConferencesInfo = 1 << 6, /**< Search in conferences info (organizer and participants) */
-	LinphoneMagicSearchSourceAll = -1                  /**< Search in all sources */
+	LinphoneMagicSearchSourceRemoteCardDAV =
+	    1 << 7,                       /**< Search in remote CardDAV servers (not locally synched ones) if any */
+	LinphoneMagicSearchSourceAll = -1 /**< Search in all sources */
 } LinphoneMagicSearchSource;
+
+/**
+ * @brief Enum describing the type of #RemoteContactDirectory (currently CardDAV or LDAP).
+ * @ingroup buddy_list
+ **/
+typedef enum _LinphoneRemoteContactDirectoryType {
+	LinphoneRemoteContactDirectoryTypeCardDav = 0, /**< Remote contact directory will use #CardDavParams */
+	LinphoneRemoteContactDirectoryTypeLdap = 1,    /**< Remote contact directory will use #LdapParams */
+} LinphoneRemoteContactDirectoryType;
 
 /**
  * @brief Enum describing how to merge #LinphoneSearchResult from #LinphoneMagicSearch
@@ -1419,5 +1431,25 @@ typedef struct _LinphoneMessageWaitingIndication LinphoneMessageWaitingIndicatio
  * @ingroup account
  */
 typedef struct _LinphoneMessageWaitingIndicationSummary LinphoneMessageWaitingIndicationSummary;
+
+/**
+ * #LinphoneBaudotMode enum represents the Baudot mode to use for the call.
+ * @ingroup call_control
+ */
+typedef enum _LinphoneBaudotMode {
+	LinphoneBaudotModeVoice,            /**< Send and receive audio. */
+	LinphoneBaudotModeTty,              /**< Send and receive Baudot tones. */
+	LinphoneBaudotModeHearingCarryOver, /**< Send Baudot tones, but receive audio. */
+	LinphoneBaudotModeVoiceCarryOver,   /**< Send audio, but receive Baudot tones. */
+} LinphoneBaudotMode;
+
+/**
+ * #LinphoneBaudotStandard enum represents the Baudot standard to use to send Baudot tones in the call.
+ * @ingroup call_control
+ */
+typedef enum _LinphoneBaudotStandard {
+	LinphoneBaudotStandardUs,     /**< Send 45.45 baud US Baudot tones. */
+	LinphoneBaudotStandardEurope, /**< Send 50 baud European Baudot tones. */
+} LinphoneBaudotStandard;
 
 #endif /* LINPHONE_TYPES_H_ */

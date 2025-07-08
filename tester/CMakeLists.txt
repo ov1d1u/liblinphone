@@ -1,6 +1,6 @@
 ############################################################################
 # CMakeLists.txt
-# Copyright (c) 2010-2022 Belledonne Communications SARL.
+# Copyright (c) 2010-2025 Belledonne Communications SARL.
 #
 ############################################################################
 #
@@ -133,6 +133,7 @@ set(DB_FILES
 	db/chatrooms.db
 	db/chatroom_conference.db
 	db/chatroom_duplicates.db
+	db/server_chatroom_duplicates.db
 )
 
 set(RC_FILES
@@ -145,8 +146,10 @@ set(RC_FILES
 	rcfiles/claire_rc
 	rcfiles/claire_sips_rc
 	rcfiles/chloe_rc
+	rcfiles/chloe_dual_proxy_rc
 	rcfiles/conference_focus_rc
 	rcfiles/empty_rc
+	rcfiles/empty_with_some_db_rc
 	rcfiles/friends_rc
 	rcfiles/groupchat_rc
 	rcfiles/invalid_friends_rc
@@ -157,6 +160,7 @@ set(RC_FILES
 	rcfiles/lise_rc
 	rcfiles/marie2_rc
 	rcfiles/marie_bodyless_rc
+	rcfiles/marie_carddav_rc
 	rcfiles/marie_dependent_proxy_rc
 	rcfiles/marie_dtls_srtp_immediate_rc
 	rcfiles/marie_dual_proxy_2_rc
@@ -171,6 +175,7 @@ set(RC_FILES
 	rcfiles/marie_rtp_port_range_rc
 	rcfiles/marie_os_defined_rtp_ports_rc
 	rcfiles/marie_rc_rtcp_xr
+	rcfiles/marie_rc_without_media
 	rcfiles/marie_remote_404_rc
 	rcfiles/marie_remote_default_values_rc
 	rcfiles/marie_remote_https_rc
@@ -214,9 +219,11 @@ set(RC_FILES
 	rcfiles/groupchat_rc
 	rcfiles/arthur_rc
 	rcfiles/marie_xml
+	rcfiles/marie_digest_auth_xml
 )
 
 set(IMAGE_FILES
+	images/bc.jpeg
 	images/linphone.svg
 	images/linphonesiteqr.jpg
 	images/linphonesiteqr_captured.jpg
@@ -268,7 +275,6 @@ set(SOURCE_FILES_C
 	flexisip_tester.c
 	group_chat_tester.c
 	group_chat_ephemeral_tester.c
-	group_chat_secure_tester.c
 	liblinphone_tester.c
 	log_collection_tester.c
 	log_file_tester.c
@@ -299,14 +305,20 @@ endif()
 
 set(SOURCE_FILES_CXX
 	tester.cpp
+	alerts_tester.cpp
 	audio-quality-tester.cpp
-	clonable-object-tester.cpp
+	bearer-auth.cpp
+	call-twisted-cases.cpp
 	call_video_tester.cpp
 	call_flexfec_tester.cpp
 	call_ice_tester.cpp
 	call_secure_tester.cpp
 	capability_negotiation_tester.cpp
+	clonable-object-tester.cpp
+	conference-info-tester.cpp
 	dtmf_tester.cpp
+	http-client-tester.cpp
+	http-server-utils.cpp
 	ice_capability_negotiation_tester.cpp
 	srtp_capability_negotiation_tester.cpp
 	zrtp_capability_negotiation_tester.cpp
@@ -332,14 +344,20 @@ set(SOURCE_FILES_CXX
 	local-chat-imdn-tester.cpp
 	local-secure-chat-tester.cpp
 	local-ephemeral-chat-tester.cpp
-	vfs-encryption-tester.cpp
 	potential_configuration_tester.cpp
-	conference-info-tester.cpp
-	alerts_tester.cpp
+	turn-server-tester.cpp
 	vcard_tester.cpp
+	vfs-encryption-tester.cpp
 	bearer-auth.cpp
 	call-twisted-cases.cpp
+	http-client-tester.cpp
+	http-server-utils.cpp
+	refer-tester.cpp
 )
+
+if(ENABLE_LIME_X3DH)
+	list(APPEND SOURCE_FILES_CXX group_chat_secure_multialgo_tester.cpp)
+endif()
 
 if(ENABLE_FLEXIAPI)
 	list(APPEND SOURCE_FILES_CXX account_creator_flexiapi_tester.cpp)
@@ -372,6 +390,7 @@ set(HEADER_FILES
 	liblinphone_tester.h
 	tools/private-access.h
 	tools/tester.h
+	http-server-utils.h
 )
 
 set(SOURCE_FILES_OBJC )

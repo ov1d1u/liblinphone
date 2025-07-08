@@ -18,7 +18,7 @@
  * along with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include <bctoolbox/defs.h>
+#include "bctoolbox/defs.h"
 
 #include "c-wrapper/c-wrapper.h"
 #include "call.h"
@@ -187,11 +187,11 @@ void Call::initiateIncoming() {
 
 bool Call::initiateOutgoing(const string &subject, const std::shared_ptr<const Content> content) {
 	shared_ptr<CallSession> session = getActiveSession();
+	session->addListener(getSharedFromThis());
 	bool defer = session->initiateOutgoing(subject, content);
 	// initiateOutgoing creates the Streams (through makeLocalMediaDescription())
 	// the configuration of sound devices must be done after streams are created.
 	configureSoundCardsFromCore(static_cast<const MediaSessionParams *>(getActiveSession()->getParams()));
-
 	return defer;
 }
 
@@ -206,7 +206,10 @@ void Call::notifyRinging() {
 }
 
 void Call::startIncomingNotification() {
-	getActiveSession()->startIncomingNotification();
+	auto ref = getSharedFromThis();
+	shared_ptr<CallSession> session = getActiveSession();
+	session->addListener(ref);
+	session->startIncomingNotification();
 }
 
 void Call::startPushIncomingNotification() {
@@ -214,7 +217,10 @@ void Call::startPushIncomingNotification() {
 }
 
 void Call::startBasicIncomingNotification() {
-	getActiveSession()->startBasicIncomingNotification();
+	auto ref = getSharedFromThis();
+	shared_ptr<CallSession> session = getActiveSession();
+	session->addListener(ref);
+	session->startBasicIncomingNotification();
 }
 
 void Call::pauseForTransfer() {
@@ -326,8 +332,6 @@ bool Call::setOutputAudioDevicePrivate(const std::shared_ptr<AudioDevice> &audio
 }
 
 void Call::cleanupSessionAndUnrefCObjectCall() {
-	auto session = getActiveSession();
-	if (session) session->removeListener(this);
 	linphone_call_unref(this->toC());
 }
 
@@ -366,28 +370,31 @@ void Call::onCallSessionEarlyFailed(const shared_ptr<CallSession> &session, Linp
 }
 
 void Call::onCallSessionSetReleased(BCTBX_UNUSED(const shared_ptr<CallSession> &session)) {
+	getCore()->getPrivate()->removeReleasingCall(getSharedFromThis());
 	cleanupSessionAndUnrefCObjectCall();
 }
 
 void Call::onCallSessionSetTerminated(BCTBX_UNUSED(const shared_ptr<CallSession> &session)) {
-	LinphoneCore *core = getCore()->getCCore();
 	if (getSharedFromThis() == getCore()->getCurrentCall()) {
 		lInfo() << "Resetting the current call";
 		getCore()->getPrivate()->setCurrentCall(nullptr);
 	}
 
-	if (getCore()->getPrivate()->removeCall(getSharedFromThis()) != 0)
-		lError() << "Could not remove the call from the list!!!";
-#if 0
-	if (mChatRoom)
-		linphone_chat_room_set_call(mChatRoom, nullptr);
-#endif // if 0
+	auto ref = getSharedFromThis();
+
+	// This is the last reference to the call therefore delete it as late as possible to ensure that also listener
+	// methods notifying the termination of a call are called
+	if (getCore()->getPrivate()->removeCall(ref) != 0) lError() << "Could not remove the call from the list!!!";
+
+	LinphoneCore *core = getCore()->getCCore();
 	if (!getCore()->getPrivate()->hasCalls()) ms_bandwidth_controller_reset_state(core->bw_controller);
 
 	if (linphone_core_get_calls_nb(core) == 0) {
 		getCore()->getPrivate()->notifySoundcardUsage(false);
 		linphone_core_notify_last_call_ended(core);
 	}
+
+	getCore()->getPrivate()->addReleasingCall(ref);
 }
 
 void Call::reenterLocalConference(BCTBX_UNUSED(const shared_ptr<CallSession> &session)) {
@@ -414,12 +421,13 @@ void Call::onCallSessionStateChanged(const shared_ptr<CallSession> &session,
 		if (op->getRemoteContactAddress()) {
 			Address remoteContactAddress;
 			remoteContactAddress.setImpl(op->getRemoteContactAddress());
-			remoteContactIsFocus = (remoteContactAddress.hasParam("isfocus"));
+			remoteContactIsFocus = (remoteContactAddress.hasParam(Conference::IsFocusParameter));
 		}
 
 		if (!op->getTo().empty()) {
 			const auto to = Address::create(op->getTo());
-			conference = L_GET_CPP_PTR_FROM_C_OBJECT(lc)->findConference(ConferenceId(to, to));
+			conference = L_GET_CPP_PTR_FROM_C_OBJECT(lc)->findConference(
+			    ConferenceId(to, to, getCore()->createConferenceIdParams()), false);
 		}
 	}
 
@@ -456,8 +464,8 @@ void Call::onCallSessionStateChanged(const shared_ptr<CallSession> &session,
 			break;
 		case CallSession::State::UpdatedByRemote: {
 			if (op && !getConference() && remoteContactIsFocus) {
-				// Check if the request was sent by the focus (remote conference)
-				createRemoteConference(session);
+				// Check if the request was sent by the focus (client conference)
+				createClientConference(session);
 				auto conference = getConference();
 				if (conference && conference->getState() == ConferenceInterface::State::CreationPending) {
 					conference->finalizeCreation();
@@ -481,11 +489,12 @@ void Call::onCallSessionStateChanged(const shared_ptr<CallSession> &session,
 					const auto &confId = session->getPrivate()->getConferenceId();
 					// Check if the request was sent by the focus
 					if (remoteContactIsFocus) {
-						createRemoteConference(session);
+						createClientConference(session);
 					} else if (!confId.empty()) {
 						auto localAddress = session->getContactAddress();
 						if (localAddress && localAddress->isValid()) {
-							ConferenceId serverConferenceId = ConferenceId(localAddress, localAddress);
+							ConferenceId serverConferenceId =
+							    ConferenceId(localAddress, localAddress, getCore()->createConferenceIdParams());
 							conference = getCore()->findConference(serverConferenceId, false);
 							if (conference) {
 								setConference(conference);
@@ -530,13 +539,14 @@ void Call::tryToAddToConference(shared_ptr<Conference> &conference, const shared
 	}
 }
 
-void Call::createRemoteConference(const shared_ptr<CallSession> &session) {
+void Call::createClientConference(const shared_ptr<CallSession> &session) {
 	// If the call is for a conference stored in the core, then add call to conference once ICE negotiations are
 	// terminated
 	const auto op = session->getPrivate()->getOp();
 	std::shared_ptr<Address> remoteContactAddress = Address::create();
 	remoteContactAddress->setImpl(op->getRemoteContactAddress());
-	ConferenceId conferenceId = ConferenceId(remoteContactAddress, getLocalAddress());
+	ConferenceId conferenceId =
+	    ConferenceId(remoteContactAddress, getLocalAddress(), getCore()->createConferenceIdParams());
 
 	const auto &conference = getCore()->findConference(conferenceId, false);
 
@@ -544,34 +554,43 @@ void Call::createRemoteConference(const shared_ptr<CallSession> &session) {
 
 	if (conference) {
 		const auto &conferenceAddress = conference->getConferenceAddress();
-		const auto conferenceAddressStr =
-		    (conferenceAddress ? conferenceAddress->toString() : std::string("<address-not-defined>"));
+		const auto conferenceAddressStr = (conferenceAddress ? conferenceAddress->toString() : std::string("sip:"));
 		lInfo() << "Attaching call (local address " << *session->getLocalAddress() << " remote address "
 		        << *session->getRemoteAddress() << ") to conference " << conference << " (address "
 		        << conferenceAddressStr << ") ID " << conferenceId;
 		clientConference = dynamic_pointer_cast<ClientConference>(conference);
 		if (clientConference) {
-			clientConference->setMainSession(session);
-			clientConference->setConferenceAddress(remoteContactAddress);
+			clientConference->attachCall(session);
 		}
 	} else {
 		auto confParams = ConferenceParams::create(getCore());
+		confParams->setAccount(getParams()->getAccount());
 		std::shared_ptr<SalMediaDescription> md = (op) ? op->getFinalMediaDescription() : nullptr;
+
+		if (op && op->getSal()->mediaDisabled()) md = op->getRemoteMediaDescription();
+
 		if (md) {
 			confParams->enableAudio(md->nbActiveStreamsOfType(SalAudio) > 0);
 			confParams->enableVideo(md->nbActiveStreamsOfType(SalVideo) > 0);
 		}
+		confParams->enableChat(remoteContactAddress && remoteContactAddress->hasParam(Conference::TextParameter));
 
-		clientConference = dynamic_pointer_cast<ClientConference>(
-		    (new ClientConference(getCore(), conferenceId.getLocalAddress(), nullptr, confParams))->toSharedPtr());
-		clientConference->initWithFocus(remoteContactAddress, session, op);
+		if (confParams->audioEnabled() || confParams->videoEnabled() || confParams->chatEnabled()) {
+			clientConference = dynamic_pointer_cast<ClientConference>(
+			    (new ClientConference(getCore(), nullptr, confParams))->toSharedPtr());
+			clientConference->initWithFocus(remoteContactAddress, session, op);
+		} else {
+			lError() << "Unable to attach call (local address " << *session->getLocalAddress() << " remote address "
+			         << *session->getRemoteAddress()
+			         << ") to a conference because it has all capabilities (audio, video and chat) disabled";
+		}
 	}
 
 	setConference(clientConference);
 
-	// Record conf-id to be used later when terminating the remote conference
-	if (remoteContactAddress->hasUriParam("conf-id")) {
-		setConferenceId(remoteContactAddress->getUriParamValue("conf-id"));
+	// Record conf-id to be used later when terminating the client conference
+	if (clientConference && remoteContactAddress->hasUriParam(Conference::ConfIdParameter)) {
+		setConferenceId(remoteContactAddress->getUriParamValue(Conference::ConfIdParameter));
 	}
 }
 
@@ -614,7 +633,8 @@ void Call::onIncomingCallSessionNotified(BCTBX_UNUSED(const shared_ptr<CallSessi
 }
 
 void Call::onIncomingCallSessionStarted(BCTBX_UNUSED(const shared_ptr<CallSession> &session)) {
-	if (linphone_core_get_calls_nb(getCore()->getCCore()) == 1 && !isInConference()) {
+	shared_ptr<Call> currentCall = getCore()->getCurrentCall();
+	if (!currentCall && !isInConference()) {
 		L_GET_PRIVATE_FROM_C_OBJECT(getCore()->getCCore())->setCurrentCall(getSharedFromThis());
 	}
 }
@@ -622,12 +642,16 @@ void Call::onIncomingCallSessionStarted(BCTBX_UNUSED(const shared_ptr<CallSessio
 void Call::onIncomingCallSessionTimeoutCheck(BCTBX_UNUSED(const shared_ptr<CallSession> &session),
                                              int elapsed,
                                              bool oneSecondElapsed) {
-	if (oneSecondElapsed)
+	auto timeout = getCore()->getCCore()->sip_conf.inc_timeout;
+	if (oneSecondElapsed) {
 		lInfo() << "Incoming call " << this << " with session " << session << " (local address "
 		        << *session->getLocalAddress() << " remote address " << *session->getRemoteAddress() << ") ringing for "
-		        << elapsed << " seconds";
-	if (elapsed > getCore()->getCCore()->sip_conf.inc_timeout) {
-		lInfo() << "Incoming call timeout (" << getCore()->getCCore()->sip_conf.inc_timeout << ")";
+		        << elapsed << " seconds (timeout: " << timeout << ")";
+	}
+	if (elapsed > timeout) {
+		lInfo() << "Incoming call " << this << " with session " << session << " (local address "
+		        << *session->getLocalAddress() << " remote address " << *session->getRemoteAddress()
+		        << ") timeout reached (" << timeout << ")";
 		auto config = linphone_core_get_config(getCore()->getCCore());
 		int statusCode = linphone_config_get_int(config, "sip", "inc_timeout_status_code", 486);
 		getActiveSession()->declineNotAnswered(linphone_error_code_to_reason(statusCode));
@@ -757,6 +781,23 @@ void Call::onRealTimeTextCharacterReceived(BCTBX_UNUSED(const shared_ptr<CallSes
 	}
 }
 
+#ifdef HAVE_BAUDOT
+void Call::onBaudotCharacterReceived(BCTBX_UNUSED(const std::shared_ptr<CallSession> &session),
+                                     char receivedCharacter) {
+	shared_ptr<AbstractChatRoom> chatRoom = getChatRoom();
+	if (chatRoom) {
+		chatRoom->baudotCharacterReceived(receivedCharacter, getSharedFromThis());
+	} else {
+		lError() << "Call::onBaudotCharacterReceived: no chatroom.";
+	}
+}
+
+void Call::onBaudotDetected(BCTBX_UNUSED(const std::shared_ptr<CallSession> &session), MSBaudotStandard standard) {
+	linphone_call_notify_baudot_detected(
+	    this->toC(), (standard == MSBaudotStandardEurope) ? LinphoneBaudotStandardEurope : LinphoneBaudotStandardUs);
+}
+#endif /* HAVE_BAUDOT */
+
 void Call::onTmmbrReceived(BCTBX_UNUSED(const shared_ptr<CallSession> &session), int streamIndex, int tmmbr) {
 	linphone_call_notify_tmmbr_received(this->toC(), streamIndex, tmmbr);
 }
@@ -779,34 +820,11 @@ std::unique_ptr<LogContextualizer> Call::getLogContextualizer() {
 
 // =============================================================================
 
-Call::Call(shared_ptr<Core> core,
-           LinphoneCallDir direction,
-           const std::shared_ptr<const Address> &from,
-           const std::shared_ptr<const Address> &to,
-           const std::shared_ptr<Account> &account,
-           SalCallOp *op,
-           const MediaSessionParams *msp)
-    : CoreAccessor(core) {
+Call::Call(std::shared_ptr<Core> core) : CoreAccessor(core) {
 	mNextVideoFrameDecoded._func = nullptr;
 	mNextVideoFrameDecoded._user_data = nullptr;
 
 	mBgTask.setName("Liblinphone call notification");
-
-	// create session
-	mParticipant = Participant::create(nullptr, ((direction == LinphoneCallIncoming) ? to : from));
-	mParticipant->createSession(getCore(), msp, TRUE, this);
-	mParticipant->getSession()->configure(direction, account, op, from, to);
-}
-
-Call::Call(std::shared_ptr<Core> core, LinphoneCallDir direction, const string &callid) : CoreAccessor(core) {
-	mNextVideoFrameDecoded._func = nullptr;
-	mNextVideoFrameDecoded._user_data = nullptr;
-
-	mBgTask.setName("Liblinphone call notification");
-
-	mParticipant = Participant::create();
-	mParticipant->createSession(getCore(), nullptr, TRUE, this);
-	mParticipant->getSession()->configure(direction, callid);
 }
 
 void Call::configureSoundCardsFromCore(const MediaSessionParams *msp) {
@@ -838,12 +856,25 @@ void Call::configureSoundCardsFromCore(const MediaSessionParams *msp) {
 	if (inputAudioDevice) setInputAudioDevicePrivate(inputAudioDevice);
 }
 
+void Call::configure(LinphoneCallDir direction, const string &callid) {
+	mParticipant = Participant::create();
+	mParticipant->createSession(getCore(), nullptr, TRUE);
+	mParticipant->getSession()->configure(direction, callid);
+}
+
 void Call::configure(LinphoneCallDir direction,
                      const std::shared_ptr<const Address> &from,
                      const std::shared_ptr<const Address> &to,
                      const std::shared_ptr<Account> &account,
                      SalCallOp *op,
                      BCTBX_UNUSED(const MediaSessionParams *msp)) {
+
+	if (!mParticipant) {
+		// create session
+		mParticipant = Participant::create(nullptr, ((direction == LinphoneCallIncoming) ? to : from));
+		mParticipant->createSession(getCore(), msp, TRUE);
+	}
+
 	mParticipant->configure(nullptr, (direction == LinphoneCallIncoming) ? to : from);
 	mParticipant->getSession()->configure(direction, account, op, from, to);
 }
@@ -888,10 +919,6 @@ bool Call::hasTransferPending() const {
 
 void Call::oglRender() const {
 	static_pointer_cast<MediaSession>(getActiveSession())->getPrivate()->oglRender();
-}
-
-LinphoneStatus Call::pauseFromConference() {
-	return static_pointer_cast<MediaSession>(getActiveSession())->pauseFromConference();
 }
 
 LinphoneStatus Call::pause() {
@@ -966,10 +993,7 @@ LinphoneStatus Call::takeVideoSnapshot(const string &file) {
 }
 
 LinphoneStatus Call::terminate(const LinphoneErrorInfo *ei) {
-	bool cleanCall = getActiveSession()->getState() == CallSession::State::OutgoingInit;
-	LinphoneStatus status = getActiveSession()->terminate(ei);
-	if (cleanCall && !status) unref();
-	return status;
+	return getActiveSession()->terminate(ei);
 }
 
 LinphoneStatus Call::transfer(const shared_ptr<Call> &dest) {
@@ -977,11 +1001,41 @@ LinphoneStatus Call::transfer(const shared_ptr<Call> &dest) {
 }
 
 LinphoneStatus Call::transfer(const string &dest) {
-	return getActiveSession()->transfer(dest);
+	auto address = getCore()->interpretUrl(dest, true);
+	return transfer(*address);
 }
 
 LinphoneStatus Call::transfer(const Address &dest) {
-	return getActiveSession()->transfer(dest);
+	LinphoneStatus ret = 0;
+	int pauseBeforeTransfer =
+	    linphone_config_get_int(linphone_core_get_config(getCore()->getCCore()), "sip", "pause_before_transfer", 0);
+	if (pauseBeforeTransfer && getState() != CallSession::State::Paused) {
+		lInfo() << *this << " must be paused before transfer.";
+		ret = pause();
+		if (ret == 0) {
+			/* request a future action to be executed when reaching the Paused state */
+			getActiveSession()->addPendingAction([this, dest]() {
+				switch (getState()) {
+					case CallSession::State::Paused:
+						lInfo() << "Call is now paused, requesting the transfer.";
+						getActiveSession()->transfer(dest);
+						break;
+					case CallSession::State::Pausing:
+						return -1; // try again
+						break;
+					default:
+						// unexpected
+						lWarning() << "The call could not be paused, transfer request aborted.";
+						break;
+				}
+				/* Even in failure case we return 0 because we don't want the action to be re-tried. */
+				return 0;
+			});
+		}
+	} else {
+		ret = getActiveSession()->transfer(dest);
+	}
+	return ret;
 }
 
 LinphoneStatus Call::updateFromConference(const MediaSessionParams *msp) {
@@ -1205,20 +1259,23 @@ const string &Call::getReferTo() const {
 	return getActiveSession()->getReferTo();
 }
 
-const std::shared_ptr<Address> Call::getReferToAddress() const {
-	return getActiveSession()->getReferToAddress();
+std::shared_ptr<Address> Call::getReferToAddress() const {
+	auto session = getActiveSession();
+	return session ? session->getReferToAddress() : nullptr;
 }
 
 std::shared_ptr<const Address> Call::getReferredBy() const {
 	return getActiveSession()->getReferredBy();
 }
 
-const std::shared_ptr<Address> Call::getRemoteAddress() const {
-	return getActiveSession()->getRemoteAddress();
+std::shared_ptr<Address> Call::getRemoteAddress() const {
+	auto session = getActiveSession();
+	return session ? session->getRemoteAddress() : nullptr;
 }
 
-const std::shared_ptr<Address> Call::getRemoteContactAddress() const {
-	return getActiveSession()->getRemoteContactAddress();
+std::shared_ptr<Address> Call::getRemoteContactAddress() const {
+	auto session = getActiveSession();
+	return session ? session->getRemoteContactAddress() : nullptr;
 }
 
 const string &Call::getRemoteContact() const {
@@ -1341,7 +1398,12 @@ void Call::setSpeakerVolumeGain(float value) {
 }
 
 MediaSessionParams *Call::createCallParams() {
-	return static_pointer_cast<MediaSession>(getActiveSession())->createMediaSessionParams();
+	auto *params = static_pointer_cast<MediaSession>(getActiveSession())->createMediaSessionParams();
+
+	// Clear custom contents as we don't want them to be copied to another MediaSessionParams
+	params->clearCustomContents();
+
+	return params;
 }
 
 void Call::setInputAudioDevice(const std::shared_ptr<AudioDevice> &audioDevice) {
@@ -1423,6 +1485,26 @@ void Call::setVideoSource(std::shared_ptr<const VideoSourceDescriptor> descripto
 std::shared_ptr<const VideoSourceDescriptor> Call::getVideoSource() const {
 	return getMediaSession()->getVideoSource();
 }
+
+// -----------------------------------------------------------------------------
+
+void Call::enableBaudotDetection(bool enabled) {
+	getMediaSession()->enableBaudotDetection(enabled);
+}
+
+void Call::setBaudotMode(LinphoneBaudotMode mode) {
+	getMediaSession()->setBaudotMode(mode);
+}
+
+void Call::setBaudotSendingStandard(LinphoneBaudotStandard standard) {
+	getMediaSession()->setBaudotSendingStandard(standard);
+}
+
+void Call::setBaudotPauseTimeout(uint8_t seconds) {
+	getMediaSession()->setBaudotPauseTimeout(seconds);
+}
+
+// -----------------------------------------------------------------------------
 
 std::shared_ptr<Event> Call::createNotify(const std::string &eventName) {
 	SalOp *callOp = getMediaSession()->getPrivate()->getOp();

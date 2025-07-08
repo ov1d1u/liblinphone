@@ -111,7 +111,7 @@ const LinphoneAddress *linphone_friend_get_address(const LinphoneFriend *lf) {
 const bctbx_list_t *linphone_friend_get_addresses(const LinphoneFriend *lf) {
 	if (!lf) return nullptr;
 	Friend::toCpp(lf)->getAddresses();
-	return Friend::toCpp(lf)->mBctbxAddresses;
+	return Friend::toCpp(lf)->getAddressesCList();
 }
 
 bctbx_list_t *linphone_friend_get_devices(const LinphoneFriend *lf) {
@@ -169,6 +169,18 @@ const char *linphone_friend_get_job_title(const LinphoneFriend *lf) {
 const char *linphone_friend_get_name(const LinphoneFriend *lf) {
 	if (!lf) return NULL;
 	return L_STRING_TO_C(Friend::toCpp(lf)->getName());
+}
+
+const char *linphone_friend_get_last_name(const LinphoneFriend *lf) {
+	if (!lf) return NULL;
+	const std::shared_ptr<Vcard> vcard = Friend::toCpp(lf)->getVcard();
+	return vcard ? L_STRING_TO_C(vcard->getFamilyName()) : NULL;
+}
+
+const char *linphone_friend_get_first_name(const LinphoneFriend *lf) {
+	if (!lf) return NULL;
+	const std::shared_ptr<Vcard> vcard = Friend::toCpp(lf)->getVcard();
+	return vcard ? L_STRING_TO_C(vcard->getGivenName()) : NULL;
 }
 
 const char *linphone_friend_get_native_uri(const LinphoneFriend *lf) {
@@ -241,6 +253,12 @@ LinphoneVcard *linphone_friend_get_vcard(const LinphoneFriend *lf) {
 	return vcard ? vcard->toC() : nullptr;
 }
 
+const char *linphone_friend_dump_vcard(const LinphoneFriend *lf) {
+	if (!lf) return NULL;
+	const std::shared_ptr<Vcard> vcard = Friend::toCpp(lf)->getVcard();
+	return vcard ? L_STRING_TO_C(vcard->asVcard4String()) : NULL;
+}
+
 bool_t linphone_friend_has_capability(const LinphoneFriend *lf, const LinphoneFriendCapability capability) {
 	return Friend::toCpp(lf)->hasCapability(capability);
 }
@@ -264,6 +282,14 @@ bool_t linphone_friend_has_phone_number(const LinphoneFriend *lf, const char *ph
 
 bool_t linphone_friend_in_list(const LinphoneFriend *lf) {
 	return Friend::toCpp(lf)->inList();
+}
+
+LinphoneFriendList *linphone_friend_get_friend_list(const LinphoneFriend *linphone_friend) {
+	FriendList *list = Friend::toCpp(linphone_friend)->getFriendList();
+	if (list) {
+		return list->toC();
+	}
+	return nullptr;
 }
 
 bool_t linphone_friend_is_presence_received(const LinphoneFriend *lf) {
@@ -320,9 +346,27 @@ LinphoneStatus linphone_friend_set_name(LinphoneFriend *lf, const char *name) {
 	return Friend::toCpp(lf)->setName(L_C_TO_STRING(name));
 }
 
+LinphoneStatus linphone_friend_set_last_name(LinphoneFriend *lf, const char *last_name) {
+	const std::shared_ptr<Vcard> vcard = Friend::toCpp(lf)->getVcard();
+	if (vcard) {
+		vcard->setFamilyName(L_C_TO_STRING(last_name));
+		return 0;
+	}
+	return -1;
+}
+
+LinphoneStatus linphone_friend_set_first_name(LinphoneFriend *lf, const char *first_name) {
+	const std::shared_ptr<Vcard> vcard = Friend::toCpp(lf)->getVcard();
+	if (vcard) {
+		vcard->setGivenName(L_C_TO_STRING(first_name));
+		return 0;
+	}
+	return -1;
+}
+
 void linphone_friend_set_native_uri(LinphoneFriend *lf, const char *native_uri) {
 	if (!lf) return;
-	Friend::toCpp(lf)->setNativeUri(native_uri);
+	Friend::toCpp(lf)->setNativeUri(L_C_TO_STRING(native_uri));
 }
 
 void linphone_friend_set_organization(LinphoneFriend *lf, const char *organization) {
@@ -668,6 +712,7 @@ LinphoneOnlineStatus linphone_friend_get_status(const LinphoneFriend *lf) {
 void linphone_core_add_friend(LinphoneCore *lc, LinphoneFriend *lf) {
 	LinphoneFriendList *friendList = linphone_core_get_default_friend_list(lc);
 	if (!friendList) {
+		ms_warning("No default friend list yet, creating it now");
 		friendList = linphone_core_create_friend_list(lc);
 		linphone_core_add_friend_list(lc, friendList);
 		linphone_friend_list_unref(friendList);
@@ -889,9 +934,14 @@ void linphone_core_set_friends_database_path(LinphoneCore *lc, const char *path)
 			lc->friends_db_file = ms_strdup(path);
 		}
 
-		if (L_GET_PRIVATE(lc->cppPtr)->mainDb) {
-			L_GET_PRIVATE(lc->cppPtr)->mainDb->import(LinphonePrivate::MainDb::Sqlite3, path);
-			linphone_core_friends_storage_resync_friends_lists(lc);
+		auto &mainDb = L_GET_PRIVATE(lc->cppPtr)->mainDb;
+		if (mainDb && mainDb->isInitialized()) {
+			if (mainDb->import(LinphonePrivate::MainDb::Sqlite3, path))
+				linphone_core_friends_storage_resync_friends_lists(lc);
+		} else {
+			ms_warning(
+			    "Database has not been initialized, therefore it is not possible to import friends database at path %s",
+			    path);
 		}
 	}
 }
@@ -916,12 +966,12 @@ int linphone_core_friends_storage_resync_friends_lists(LinphoneCore *lc) {
 
 	// First remove all the orphan friends from the DB (friends that are not in a friend list)
 	mainDb->deleteOrphanFriends();
-	lc->cppPtr->clearFriendLists();
 
 	std::list<std::shared_ptr<FriendList>> friendLists = mainDb->getFriendLists();
 	if (!friendLists.empty()) {
 		lc->friends_lists =
 		    bctbx_list_free_with_data(lc->friends_lists, (bctbx_list_free_func)linphone_friend_list_unref);
+		lc->cppPtr->clearFriendLists();
 
 		for (auto &friendList : friendLists) {
 			linphone_core_add_friend_list(lc, friendList->toC());

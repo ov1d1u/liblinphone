@@ -18,13 +18,11 @@
  * along with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 #include "conference/conference-info.h"
-#include "liblinphone_tester.h"
 #include "linphone/api/c-call-log.h"
 #include "linphone/api/c-conference-params.h"
 #include "linphone/api/c-participant-info.h"
 #include "linphone/api/c-participant.h"
 #include "local-conference-tester-functions.h"
-#include "shared_tester_functions.h"
 
 namespace LinphoneTest {
 
@@ -155,9 +153,9 @@ void create_transfer_conference_base(time_t start_time,
 
 		LinphoneAddress *confAddr =
 		    create_conference_on_server(focus, marie, participantList, start_time, end_time, initialSubject,
-		                                description, TRUE, security_level, video_transfer, FALSE);
+		                                description, TRUE, security_level, video_transfer, FALSE, NULL);
 		BC_ASSERT_PTR_NOT_NULL(confAddr);
-		char *conference_address_str = (confAddr) ? linphone_address_as_string(confAddr) : ms_strdup("sip:unknown");
+		char *conference_address_str = (confAddr) ? linphone_address_as_string(confAddr) : ms_strdup("sip:");
 
 		// Chat room creation to send ICS
 		BC_ASSERT_TRUE(wait_for_list(coresList, &marie.getStats().number_of_LinphoneChatRoomStateCreated, 2,
@@ -247,12 +245,15 @@ void create_transfer_conference_base(time_t start_time,
 		BC_ASSERT_TRUE(wait_for_list(coresList, &focus.getStats().number_of_participant_devices_added,
 		                             focus_stat.number_of_participant_devices_added + 3,
 		                             liblinphone_tester_sip_timeout));
-		BC_ASSERT_TRUE(wait_for_list(coresList, &focus.getStats().number_of_participant_devices_joined,
-		                             focus_stat.number_of_participant_devices_joined + 3,
+		BC_ASSERT_TRUE(wait_for_list(coresList, &focus.getStats().number_of_conference_participant_devices_present,
+		                             focus_stat.number_of_conference_participant_devices_present + 3,
+		                             liblinphone_tester_sip_timeout));
+		BC_ASSERT_TRUE(wait_for_list(coresList, &focus.getStats().number_of_participant_devices_present,
+		                             focus_stat.number_of_participant_devices_present + 3,
 		                             liblinphone_tester_sip_timeout));
 
 		std::map<LinphoneCoreManager *, LinphoneParticipantInfo *> memberList =
-		    fill_memmber_list(members, participantList, marie.getCMgr(), participants_info);
+		    fill_member_list(members, participantList, marie.getCMgr(), participants_info);
 		wait_for_conference_streams({focus, marie, pauline, laure}, conferenceMgrs, focus.getCMgr(), memberList,
 		                            confAddr, video_transfer);
 
@@ -330,10 +331,7 @@ void create_transfer_conference_base(time_t start_time,
 				}
 				BC_ASSERT_EQUAL(linphone_conference_get_participant_count(pconference), no_participants, int, "%0d");
 				BC_ASSERT_STRING_EQUAL(linphone_conference_get_subject(pconference), initialSubject);
-				LinphoneParticipant *me = linphone_conference_get_me(pconference);
-				BC_ASSERT_TRUE(linphone_participant_is_admin(me) ==
-				               ((mgr == marie.getCMgr()) || (mgr == focus.getCMgr())));
-				BC_ASSERT_TRUE(linphone_address_weak_equal(linphone_participant_get_address(me), mgr->identity));
+				check_conference_me(pconference, ((mgr == marie.getCMgr()) || (mgr == focus.getCMgr())));
 				bctbx_list_t *participants = linphone_conference_get_participant_list(pconference);
 				for (bctbx_list_t *itp = participants; itp; itp = bctbx_list_next(itp)) {
 					LinphoneParticipant *p = (LinphoneParticipant *)bctbx_list_get_data(itp);
@@ -355,7 +353,7 @@ void create_transfer_conference_base(time_t start_time,
 		// Restart marie audiostream
 		LinphoneCall *marie_call = linphone_core_get_call_by_remote_address2(marie.getLc(), focus.getCMgr()->identity);
 		linphone_call_restart_main_audio_stream(marie_call);
-		// wait bit more to detect side effect if any
+		// wait a bit longer to detect side effect if any
 		CoreManagerAssert({focus, marie, pauline, laure}).waitUntil(chrono::seconds(5), [] { return false; });
 
 		for (auto mgr : conferenceMgrs) {
@@ -429,16 +427,8 @@ void create_transfer_conference_base(time_t start_time,
 			}
 		}
 
-		if (end_time > 0) {
-			time_t now = ms_time(NULL);
-			time_t time_left = end_time - now + linphone_core_get_conference_cleanup_period(focus.getLc());
-			if (time_left > 0) {
-				// wait for the conference to end
-				CoreManagerAssert({focus, marie, pauline}).waitUntil(chrono::seconds((time_left + 1)), [] {
-					return false;
-				});
-			}
-		}
+		check_delete_focus_conference_info({focus, marie, pauline, laure}, conferenceMgrs, focus.getCMgr(), confAddr,
+		                                   end_time);
 
 		BC_ASSERT_TRUE(wait_for_list(coresList, &focus.getStats().number_of_LinphoneConferenceStateTerminationPending,
 		                             1, liblinphone_tester_sip_timeout));
@@ -450,15 +440,13 @@ void create_transfer_conference_base(time_t start_time,
 		std::list<LinphoneCoreManager *> allMembers{marie.getCMgr(), pauline.getCMgr(), laure.getCMgr()};
 		for (auto mgr : allMembers) {
 			const bctbx_list_t *call_logs = linphone_core_get_call_logs(mgr->lc);
-			BC_ASSERT_EQUAL((unsigned int)bctbx_list_size(call_logs), ((false && (mgr == marie.getCMgr())) ? 2 : 1),
-			                unsigned int, "%u");
+			BC_ASSERT_EQUAL(bctbx_list_size(call_logs), 1, size_t, "%zu");
 
 			bctbx_list_t *mgr_focus_call_log =
 			    linphone_core_get_call_history_2(mgr->lc, focus.getCMgr()->identity, mgr->identity);
 			BC_ASSERT_PTR_NOT_NULL(mgr_focus_call_log);
 			if (mgr_focus_call_log) {
-				BC_ASSERT_EQUAL((unsigned int)bctbx_list_size(mgr_focus_call_log),
-				                ((false && (mgr == marie.getCMgr())) ? 2 : 1), unsigned int, "%u");
+				BC_ASSERT_EQUAL(bctbx_list_size(mgr_focus_call_log), 1, size_t, "%zu");
 				for (bctbx_list_t *it = mgr_focus_call_log; it; it = bctbx_list_next(it)) {
 					LinphoneCallLog *call_log = (LinphoneCallLog *)it->data;
 					BC_ASSERT_TRUE(linphone_call_log_was_conference(call_log));
@@ -467,7 +455,7 @@ void create_transfer_conference_base(time_t start_time,
 			}
 		}
 
-		// wait bit more to detect side effect if any
+		// wait a bit longer to detect side effect if any
 		CoreManagerAssert({focus, marie, pauline, laure}).waitUntil(chrono::seconds(2), [] { return false; });
 
 		ms_free(conference_address_str);
@@ -509,20 +497,14 @@ static void create_video_transfer_conference(void) {
 }
 
 #ifdef HAVE_EKT_SERVER_PLUGIN
-static void create_audio_encrypted_conference(void) {
-	create_transfer_conference_base(ms_time(NULL), -1, LinphoneConferenceParticipantListTypeOpen,
-	                                LinphoneMediaEncryptionSRTP, LinphoneConferenceLayoutActiveSpeaker,
-	                                LinphoneConferenceSecurityLevelEndToEnd, true, false);
-}
-
-static void create_audio_encrypted_conference_multi_encrypt(void) {
+static void create_audio_video_encrypted_conference_multi_encrypt(void) {
 	create_transfer_conference_base(
 	    ms_time(NULL), -1, LinphoneConferenceParticipantListTypeOpen,
 	    {LinphoneMediaEncryptionSRTP, LinphoneMediaEncryptionZRTP, LinphoneMediaEncryptionDTLS},
-	    LinphoneConferenceLayoutActiveSpeaker, LinphoneConferenceSecurityLevelEndToEnd, true, false);
+	    LinphoneConferenceLayoutActiveSpeaker, LinphoneConferenceSecurityLevelEndToEnd, true, true);
 }
 
-static void create_video_encrypted_conference(void) {
+static void create_audio_video_encrypted_conference(void) {
 	create_transfer_conference_base(ms_time(NULL), -1, LinphoneConferenceParticipantListTypeOpen,
 	                                LinphoneMediaEncryptionSRTP, LinphoneConferenceLayoutActiveSpeaker,
 	                                LinphoneConferenceSecurityLevelEndToEnd, true, true);
@@ -538,6 +520,13 @@ static void conference_joined_in_early_media(void) {
 	{ // to make sure focus is destroyed after clients.
 		ClientConference marie("marie_rc", focus.getConferenceFactoryAddress(), FALSE);
 		ClientConference pauline("pauline_rc", focus.getConferenceFactoryAddress(), FALSE);
+
+		// A B2BUA doesn't have a factory address
+		LinphoneAccount *account = linphone_core_get_default_account(focus.getLc());
+		LinphoneAccountParams *account_params = linphone_account_params_clone(linphone_account_get_params(account));
+		linphone_account_params_set_conference_factory_address(account_params, NULL);
+		linphone_account_set_params(account, account_params);
+		linphone_account_params_unref(account_params);
 
 		char *marie_filename = liblinphone_tester_make_unique_file_path("marie_record", "wav");
 		char *marie_recordpath = bc_tester_file(marie_filename);
@@ -628,7 +617,7 @@ static void conference_joined_in_early_media(void) {
 		    linphone_core_get_call_by_remote_address2(pauline.getLc(), focus.getIdentity().toC());
 		BC_ASSERT_PTR_NOT_NULL(pauline_call);
 		if (pauline_call) {
-			LinphoneCallParams *pauline_params = linphone_core_create_call_params(marie.getLc(), nullptr);
+			LinphoneCallParams *pauline_params = linphone_core_create_call_params(pauline.getLc(), nullptr);
 			linphone_call_params_enable_video(pauline_params, FALSE);
 			linphone_call_params_enable_early_media_sending(pauline_params, TRUE);
 			ms_message("%s accepts early media in call to %s", linphone_core_get_identity(pauline.getLc()),
@@ -647,8 +636,15 @@ static void conference_joined_in_early_media(void) {
 		// The focus relays the early media to Marie
 		LinphoneCall *focus_call = linphone_core_get_call_by_remote_address2(focus.getLc(), marie.getIdentity().toC());
 		BC_ASSERT_PTR_NOT_NULL(focus_call);
+		std::string oldFocusMarieOpCallId;
 		if (focus_call) {
-			LinphoneCallParams *focus_early_media_params = linphone_core_create_call_params(marie.getLc(), nullptr);
+			SalOp *op = linphone_call_get_op(focus_call);
+			oldFocusMarieOpCallId = op->getCallId();
+			BC_ASSERT_FALSE(oldFocusMarieOpCallId.empty());
+			const char *logCallId = linphone_call_log_get_call_id(linphone_call_get_call_log(focus_call));
+			BC_ASSERT_PTR_NOT_NULL(logCallId);
+			BC_ASSERT_STRING_EQUAL(oldFocusMarieOpCallId.c_str(), logCallId);
+			LinphoneCallParams *focus_early_media_params = linphone_core_create_call_params(focus.getLc(), nullptr);
 			linphone_call_params_enable_video(focus_early_media_params, FALSE);
 			linphone_call_params_enable_early_media_sending(focus_early_media_params, TRUE);
 			ms_message("%s accepts early media in call to %s", linphone_core_get_identity(focus.getLc()),
@@ -656,6 +652,19 @@ static void conference_joined_in_early_media(void) {
 			linphone_call_accept_early_media_with_params(focus_call, focus_early_media_params);
 			linphone_call_params_unref(focus_early_media_params);
 		}
+
+		LinphoneCall *marie_call = linphone_core_get_call_by_remote_address2(marie.getLc(), focus.getIdentity().toC());
+		BC_ASSERT_PTR_NOT_NULL(marie_call);
+		std::string oldMarieFocusOpCallId;
+		if (marie_call) {
+			SalOp *op = linphone_call_get_op(marie_call);
+			oldMarieFocusOpCallId = op->getCallId();
+			BC_ASSERT_FALSE(oldMarieFocusOpCallId.empty());
+			const char *logCallId = linphone_call_log_get_call_id(linphone_call_get_call_log(marie_call));
+			BC_ASSERT_PTR_NOT_NULL(logCallId);
+			BC_ASSERT_STRING_EQUAL(oldMarieFocusOpCallId.c_str(), logCallId);
+		}
+		BC_ASSERT_STRING_EQUAL(oldMarieFocusOpCallId.c_str(), oldFocusMarieOpCallId.c_str());
 
 		BC_ASSERT_TRUE(wait_for_list(coresList, &focus.getStats().number_of_LinphoneCallIncomingEarlyMedia,
 		                             focus_stat.number_of_LinphoneCallIncomingEarlyMedia + 1,
@@ -688,6 +697,80 @@ static void conference_joined_in_early_media(void) {
 		/*wait for one second longer so that last RTP packets can arrive*/
 		CoreManagerAssert({focus, marie, pauline}).waitUntil(chrono::seconds(1), [] { return false; });
 
+		ms_message("%s's network becomes instable. The network suddenly drops and comes back up immediately",
+		           linphone_core_get_identity(marie.getLc()));
+		linphone_core_set_network_reachable(marie.getLc(), FALSE);
+		linphone_core_set_network_reachable(marie.getLc(), TRUE);
+
+		BC_ASSERT_TRUE(wait_for_list(coresList, &marie.getStats().number_of_LinphoneCallOutgoingEarlyMedia,
+		                             marie_stat.number_of_LinphoneCallOutgoingEarlyMedia + 2,
+		                             liblinphone_tester_sip_timeout));
+
+		// Pauline accepts the call
+		pauline_call = linphone_core_get_call_by_remote_address2(pauline.getLc(), focus.getIdentity().toC());
+		BC_ASSERT_PTR_NOT_NULL(pauline_call);
+		if (pauline_call) {
+			LinphoneCallParams *pauline_params = linphone_core_create_call_params(pauline.getLc(), pauline_call);
+			linphone_call_params_enable_video(pauline_params, TRUE);
+			linphone_call_params_enable_early_media_sending(pauline_params, FALSE);
+			ms_message("%s accepts the call from %s", linphone_core_get_identity(pauline.getLc()),
+			           linphone_core_get_identity(focus.getLc()));
+			linphone_call_accept_with_params(pauline_call, pauline_params);
+			linphone_call_params_unref(pauline_params);
+		}
+
+		BC_ASSERT_TRUE(wait_for_list(coresList, &pauline.getStats().number_of_LinphoneCallStreamsRunning,
+		                             pauline_stat.number_of_LinphoneCallStreamsRunning + 1,
+		                             liblinphone_tester_sip_timeout));
+		BC_ASSERT_TRUE(wait_for_list(coresList, &focus.getStats().number_of_LinphoneCallStreamsRunning,
+		                             focus_stat.number_of_LinphoneCallStreamsRunning + 1,
+		                             liblinphone_tester_sip_timeout));
+
+		// The focus relays the acceptance of the call to Marie
+		focus_call = linphone_core_get_call_by_remote_address2(focus.getLc(), marie.getIdentity().toC());
+		BC_ASSERT_PTR_NOT_NULL(focus_call);
+		std::string newFocusMarieOpCallId;
+		if (focus_call) {
+			SalOp *op = linphone_call_get_op(focus_call);
+			newFocusMarieOpCallId = op->getCallId();
+			BC_ASSERT_FALSE(newFocusMarieOpCallId.empty());
+			const char *logCallId = linphone_call_log_get_call_id(linphone_call_get_call_log(focus_call));
+			BC_ASSERT_PTR_NOT_NULL(logCallId);
+			BC_ASSERT_STRING_EQUAL(newFocusMarieOpCallId.c_str(), logCallId);
+			BC_ASSERT_STRING_NOT_EQUAL(newFocusMarieOpCallId.c_str(), oldFocusMarieOpCallId.c_str());
+			LinphoneCallParams *focus_accept_params = linphone_core_create_call_params(focus.getLc(), focus_call);
+			linphone_call_params_enable_video(focus_accept_params, TRUE);
+			linphone_call_params_enable_early_media_sending(focus_accept_params, FALSE);
+			ms_message("%s accepts the call from %s", linphone_core_get_identity(focus.getLc()),
+			           linphone_core_get_identity(marie.getLc()));
+			linphone_call_accept_with_params(focus_call, focus_accept_params);
+			linphone_call_params_unref(focus_accept_params);
+		}
+
+		marie_call = linphone_core_get_call_by_remote_address2(marie.getLc(), focus.getIdentity().toC());
+		BC_ASSERT_PTR_NOT_NULL(marie_call);
+		std::string newMarieFocusOpCallId;
+		if (marie_call) {
+			SalOp *op = linphone_call_get_op(marie_call);
+			newMarieFocusOpCallId = op->getCallId();
+			BC_ASSERT_FALSE(newMarieFocusOpCallId.empty());
+			const char *logCallId = linphone_call_log_get_call_id(linphone_call_get_call_log(marie_call));
+			BC_ASSERT_PTR_NOT_NULL(logCallId);
+			BC_ASSERT_STRING_EQUAL(newMarieFocusOpCallId.c_str(), logCallId);
+			BC_ASSERT_STRING_NOT_EQUAL(newMarieFocusOpCallId.c_str(), oldMarieFocusOpCallId.c_str());
+		}
+		// Verify that the call ID has changed as Marie recovered the call after the network dropped
+		// Earlier in the test, there are more verification to ensure the call logs have been updated
+		BC_ASSERT_STRING_EQUAL(newMarieFocusOpCallId.c_str(), newFocusMarieOpCallId.c_str());
+		BC_ASSERT_STRING_NOT_EQUAL(newMarieFocusOpCallId.c_str(), oldFocusMarieOpCallId.c_str());
+
+		BC_ASSERT_TRUE(wait_for_list(coresList, &focus.getStats().number_of_LinphoneCallStreamsRunning,
+		                             focus_stat.number_of_LinphoneCallStreamsRunning + 2,
+		                             liblinphone_tester_sip_timeout));
+		BC_ASSERT_TRUE(wait_for_list(coresList, &marie.getStats().number_of_LinphoneCallStreamsRunning,
+		                             marie_stat.number_of_LinphoneCallStreamsRunning + 1,
+		                             liblinphone_tester_sip_timeout));
+
 		end_call(marie.getCMgr(), focus.getCMgr());
 		end_call(pauline.getCMgr(), focus.getCMgr());
 
@@ -715,10 +798,10 @@ static test_t local_conference_transferred_conference_basic_tests[] = {
                 LinphoneTest::create_video_transfer_conference_active_speaker_changed),
     TEST_NO_TAG("Conference joined in early media", LinphoneTest::conference_joined_in_early_media),
 #ifdef HAVE_EKT_SERVER_PLUGIN
-    TEST_ONE_TAG("Create encrypted audio conference", LinphoneTest::create_audio_encrypted_conference, "End2EndConf"),
-    TEST_ONE_TAG("Create encrypted video conference", LinphoneTest::create_video_encrypted_conference, "End2EndConf"),
+    TEST_ONE_TAG(
+        "Create encrypted video conference", LinphoneTest::create_audio_video_encrypted_conference, "End2EndConf"),
     TEST_ONE_TAG("Create encrypted audio conference multiple external SRTP key negociation scheme",
-                 LinphoneTest::create_audio_encrypted_conference_multi_encrypt,
+                 LinphoneTest::create_audio_video_encrypted_conference_multi_encrypt,
                  "End2EndConf"),
 #endif // HAVE_EKT_SERVER_PLUGIN
 };

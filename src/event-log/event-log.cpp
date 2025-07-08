@@ -103,6 +103,9 @@ std::ostream &operator<<(std::ostream &lhs, EventLog::Type e) {
 		case EventLog::Type::ConferenceParticipantRoleListener:
 			lhs << "ConferenceParticipantRoleListener";
 			break;
+		case EventLog::Type::ConferenceAllowedParticipantListChanged:
+			lhs << "ConferenceAllowedParticipantListChanged";
+			break;
 		case EventLog::Type::ConferenceParticipantSetAdmin:
 			lhs << "ConferenceParticipantSetAdmin";
 			break;
@@ -114,6 +117,9 @@ std::ostream &operator<<(std::ostream &lhs, EventLog::Type e) {
 			break;
 		case EventLog::Type::ConferenceParticipantDeviceRemoved:
 			lhs << "ConferenceParticipantDeviceRemoved";
+			break;
+		case EventLog::Type::ConferenceParticipantDeviceJoiningRequest:
+			lhs << "ConferenceParticipantDeviceJoiningRequest";
 			break;
 		case EventLog::Type::ConferenceParticipantDeviceMediaCapabilityChanged:
 			lhs << "ConferenceParticipantDeviceMediaCapabilityChanged";

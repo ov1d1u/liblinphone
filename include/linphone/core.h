@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010-2022 Belledonne Communications SARL.
+ * Copyright (c) 2010-2025 Belledonne Communications SARL.
  *
  * This file is part of Liblinphone
  * (see https://gitlab.linphone.org/BC/public/liblinphone).
@@ -27,7 +27,7 @@
 #include "linphone/account_creator.h"
 #include "linphone/account_creator_service.h"
 #include "linphone/api/c-api.h"
-#include "linphone/buffer.h"
+#include "linphone/api/c-buffer.h"
 #include "linphone/call.h"
 #include "linphone/call_params.h"
 #include "linphone/call_stats.h"
@@ -220,7 +220,7 @@ typedef struct _LinphoneCoreVTable {
 	    message_received_unable_decrypt; /**< an encrypted message is received but we can't decrypt it*/
 	LinphoneCoreIsComposingReceivedCb is_composing_received;   /**< An is-composing notification has been received */
 	LinphoneCoreDtmfReceivedCb dtmf_received;                  /**< A dtmf has been received received */
-	LinphoneCoreReferReceivedCb refer_received;                /**< An out of call refer was received */
+	LinphoneCoreCbsReferReceivedCb refer_received;             /**< An out of call refer was received */
 	LinphoneCoreCbsCallGoClearAckSentCb call_goclear_ack_sent; /**< Notifies on sending of GoClear Ack */
 	LinphoneCoreCallEncryptionChangedCb
 	    call_encryption_changed; /**< Notifies on change in the encryption of call streams */
@@ -1745,7 +1745,7 @@ LINPHONE_PUBLIC LinphoneCall *linphone_core_invite_address_with_params(LinphoneC
  * @param core #LinphoneCore object @notnil
  * @param addr The destination of the call (sip address). @notnil
  * @param params Call parameters @notnil
- * @param subject Subject of the call @maybenil
+ * @param subject Subject of the call, UTF-8 encoded @maybenil
  * @param content Body of the SIP INVITE @maybenil
  * @return A #LinphoneCall object or NULL in case of failure. @maybenil
  * @ingroup call_control
@@ -2540,12 +2540,14 @@ linphone_core_find_auth_info(LinphoneCore *core, const char *realm, const char *
 
 /**
  * This method is used to abort a user authentication request initiated by #LinphoneCore
- * from the auth_info_requested callback of LinphoneCoreVTable.
- * @note That function does nothing for now.
+ * from the authentication_requested callback of #LinphoneCoreCbs
+ * @note this function currently does not take into account the 'info' parameter.
+ * All pending authentication requests are aborted.
  * @param core the #LinphoneCore @notnil
- * @param info the #LinphoneAuthInfo for which to abort authentication @notnil
+ * @param info the #LinphoneAuthInfo for which to abort authentication @maybenil
+ * @ingroup authentication
  **/
-LINPHONE_PUBLIC void linphone_core_abort_authentication(LinphoneCore *core, LinphoneAuthInfo *info);
+LINPHONE_PUBLIC void linphone_core_abort_authentication(LinphoneCore *core, const LinphoneAuthInfo *info);
 
 /**
  * Clears all authentication information.
@@ -3310,7 +3312,7 @@ LINPHONE_PUBLIC bool_t linphone_core_get_disable_record_on_mute(LinphoneCore *co
 LINPHONE_PUBLIC void linphone_core_set_playback_gain_db(LinphoneCore *core, float level);
 
 /**
- * Get playback gain in db before entering  sound card.
+ * Gets playback gain in db (before entering sound card).
  * @param core #LinphoneCore object @notnil
  * @return The current playback gain
  * @ingroup media_parameters
@@ -3794,7 +3796,7 @@ LINPHONE_PUBLIC void linphone_core_remove_call_log(LinphoneCore *core, LinphoneC
 /**
  * Migrates the call logs from the linphonerc to the database if not done yet
  * @ingroup initializing
- * @param core the linphone core @notnil
+ * @param core the #LinphoneCore. @notnil
  **/
 LINPHONE_PUBLIC void linphone_core_migrate_logs_from_rc_to_db(LinphoneCore *core);
 
@@ -4085,7 +4087,7 @@ LINPHONE_PUBLIC void linphone_core_set_preferred_framerate(LinphoneCore *core, f
 
 /**
  * Returns the preferred video framerate, previously set by linphone_core_set_preferred_framerate().
- * @param core the linphone core @notnil
+ * @param core the #LinphoneCore. @notnil
  * @return frame rate in number of frames per seconds.
  * @ingroup media_parameters
  **/
@@ -4150,7 +4152,7 @@ LINPHONE_PUBLIC bool_t linphone_core_qrcode_video_preview_enabled(const Linphone
  * Note that the snapshot is asynchronous, an application shall not assume that the file is created when the function
  *returns.
  * @ingroup misc
- * @param core the linphone core @notnil
+ * @param core the #LinphoneCore. @notnil
  * @param file a path where to write the jpeg content. @notnil
  * @return 0 if successful, -1 otherwise (typically if jpeg format is not supported).
  **/
@@ -4295,13 +4297,13 @@ LINPHONE_PUBLIC void *linphone_core_get_native_video_window_id(const LinphoneCor
  * @ingroup media_parameters
  * For MacOS, Linux, Windows: core will create its own window
  */
-#define LINPHONE_VIDEO_DISPLAY_AUTO (void *)((unsigned long)0)
+#define LINPHONE_VIDEO_DISPLAY_AUTO (void *)(0)
 
 /**
  * @ingroup media_parameters
  * For MacOS, Linux, Windows: do nothing
  */
-#define LINPHONE_VIDEO_DISPLAY_NONE (void *)((unsigned long)-1)
+#define LINPHONE_VIDEO_DISPLAY_NONE (void *)(-1)
 
 /**
  * @ingroup media_parameters
@@ -4459,23 +4461,21 @@ LINPHONE_PUBLIC void linphone_core_set_use_files(LinphoneCore *core, bool_t yesn
 LINPHONE_PUBLIC bool_t linphone_core_get_use_files(LinphoneCore *core);
 
 /**
- * Get the wav file that is played when putting somebody on hold,
- * or when files are used instead of soundcards (see linphone_core_set_use_files()).
+ * Get the wav file that is played when files are used instead of soundcards (see linphone_core_set_use_files()).
  *
  * The file is a 16 bit linear wav file.
  * @param core #LinphoneCore object @notnil
- * @return The path to the file that is played when putting somebody on hold. @maybenil
+ * @return The path to the file that is played when files are used instead of soundcards. @maybenil
  * @ingroup media_parameters
  */
 LINPHONE_PUBLIC const char *linphone_core_get_play_file(const LinphoneCore *core);
 
 /**
- * Sets a wav file to be played when putting somebody on hold,
- * or when files are used instead of soundcards (see linphone_core_set_use_files()).
+ * Sets a wav file to be played when files are used instead of soundcards (see linphone_core_set_use_files()).
  *
  * The file must be a 16 bit linear wav file.
  * @param core #LinphoneCore object @notnil
- * @param file The path to the file to be played when putting somebody on hold. @maybenil
+ * @param file The path to the file to be played when files are used instead of soundcards. @maybenil
  * @ingroup media_parameters
  **/
 LINPHONE_PUBLIC void linphone_core_set_play_file(LinphoneCore *core, const char *file);
@@ -4503,6 +4503,26 @@ LINPHONE_PUBLIC const char *linphone_core_get_record_file(const LinphoneCore *co
  * @ingroup media_parameters
  **/
 LINPHONE_PUBLIC void linphone_core_set_record_file(LinphoneCore *core, const char *file);
+
+/**
+ * Get the wav file played when putting a call on hold with linphone_call_pause()
+ *
+ * The file is a 16 bit linear file.
+ * @param core #LinphoneCore object @notnil
+ * @return The path to the file that is played when putting a call on hold. @maybenil
+ * @ingroup media_parameters
+ */
+LINPHONE_PUBLIC const char *linphone_core_get_call_on_hold_music_file(const LinphoneCore *core);
+
+/**
+ * Sets a wav file to be played when putting somebody on hold (see linphone_core_set_use_files()).
+ *
+ * The file must be a 16 bit linear wav file.
+ * @param core #LinphoneCore object @notnil
+ * @param file The path to the file to be played when putting somebody on hold. @maybenil
+ * @ingroup media_parameters
+ **/
+LINPHONE_PUBLIC void linphone_core_set_call_on_hold_music_file(LinphoneCore *core, const char *file);
 
 /**
  * Plays a dtmf sound to the local user.
@@ -4873,19 +4893,22 @@ LINPHONE_PUBLIC void linphone_core_reload_ms_plugins(LinphoneCore *core, const c
  */
 
 /**
- * Create a conference. Local or remote conference is determinated from the 'conference_type' variable in the 'misc'
+ * Create a conference. Local or client conference is determinated from the 'conference_type' variable in the 'misc'
  * section of the configuration, or by the factory address parameter. See
  * linphone_conference_params_set_conference_factory_address() for more details.
  * @param core The #LinphoneCore instance where the conference will be created inside. @notnil
  * @param params Parameters of the conference. See #LinphoneConferenceParams. @notnil
  * @return A pointer on the freshly created conference #LinphoneConference. That object will be automatically
  * freed by the core after calling linphone_core_terminate_conference(). @maybenil
+ * @warning To guarantee the backward comatibility, this method will assign the created conference to the conference
+ * context held by the core. Nonetheless starting from release 5.4, the conference context will be override at every
+ * conference created by calling this method
  */
 LINPHONE_PUBLIC LinphoneConference *linphone_core_create_conference_with_params(LinphoneCore *core,
                                                                                 const LinphoneConferenceParams *params);
 
 /**
- * Create a conference scheduler that can be used to schedule conferences on a remote conference service and then send
+ * Create a conference scheduler that can be used to schedule conferences on a client conference service and then send
  * conference information invitation as an ICS object through chat.
  * @param core The #LinphoneCore. @notnil
  * @return A pointer on the freshly created #LinphoneConferenceScheduler. @notnil
@@ -4896,7 +4919,7 @@ LINPHONE_PUBLIC LINPHONE_DEPRECATED LinphoneConferenceScheduler *
 linphone_core_create_conference_scheduler(LinphoneCore *core);
 
 /**
- * Create a conference scheduler that can be used to create remote conferences for now or later and then send conference
+ * Create a conference scheduler that can be used to create client conferences for now or later and then send conference
  * info as an ICS through chat.
  * A SipConferenceScheduler is created if the #LinphoneAccount has not defined the URL of the CCMP server, other it will
  * create a CCMPConferenceServer
@@ -4908,7 +4931,7 @@ LINPHONE_PUBLIC LinphoneConferenceScheduler *linphone_core_create_conference_sch
                                                                                          LinphoneAccount *account);
 
 /**
- * Create a conference scheduler that can be used to create remote conferences for now or later and then send conference
+ * Create a conference scheduler that can be used to create client conferences for now or later and then send conference
  * info as an ICS through chat by specifying its type.
  * @param core The #LinphoneCore. @notnil
  * @param account The #LinphoneAccount to use in the #LinphoneConferenceScheduler. @maybenil
@@ -4919,7 +4942,7 @@ LINPHONE_PUBLIC LinphoneConferenceScheduler *linphone_core_create_conference_sch
     LinphoneCore *core, LinphoneAccount *account, LinphoneConferenceSchedulerType scheduling_type);
 
 /**
- * Create a SIP conference scheduler that can be used to create remote conferences for now or later and then send
+ * Create a SIP conference scheduler that can be used to create client conferences for now or later and then send
  * conference info as an ICS through chat. A SipConferenceScheduler creates a conference on a server by using a SIP
  * dialog
  * @param core The #LinphoneCore. @notnil
@@ -4930,7 +4953,7 @@ LINPHONE_PUBLIC LinphoneConferenceScheduler *linphone_core_create_sip_conference
                                                                                            LinphoneAccount *account);
 
 /**
- * Create a database conference scheduler that can be used to create remote conferences for now or later and then send
+ * Create a database conference scheduler that can be used to create client conferences for now or later and then send
  * conference info as an ICS through chat. The DBConferenceScheduler only creates a conference info to be stored in the
  * database of the linphone core
  * @param core The #LinphoneCore. @notnil
@@ -4941,7 +4964,7 @@ LINPHONE_PUBLIC LinphoneConferenceScheduler *linphone_core_create_db_conference_
                                                                                           LinphoneAccount *account);
 
 /**
- * Create a SIP conference scheduler that can be used to create remote conferences for now or later and then send
+ * Create a SIP conference scheduler that can be used to create client conferences for now or later and then send
  * conference info as an ICS through chat. A CCMPConferenceScheduler creates a conference on a server by using the CCMP
  * protocol
  * @param core The #LinphoneCore. @notnil
@@ -4980,14 +5003,26 @@ LINPHONE_PUBLIC LinphoneConference *linphone_core_search_conference_2(const Linp
                                                                       const LinphoneAddress *conferenceAddr);
 
 /**
+ * Find a conference by its identifier.
+ *
+ * @param core A #LinphoneCore object @notnil
+ * @param identifier The conference identifier @notnil
+ * @return A matching conference or NULL if none matches. @maybenil
+ */
+LINPHONE_PUBLIC LinphoneConference *linphone_core_search_conference_by_identifier(const LinphoneCore *core,
+                                                                                  const char *identifier);
+
+/**
  * Adds a participant to the conference. If no conference is going on
  * a new internal conference context is created and the participant is
  * added to it.
  * @param core #LinphoneCore @notnil
  * @param call The current call with the participant to add @notnil
  * @return 0 if succeeded. Negative number if failed
+ * @deprecated 23/01/2025 Use linphone_conference_add_participant() instead.
  */
-LINPHONE_PUBLIC LinphoneStatus linphone_core_add_to_conference(LinphoneCore *core, LinphoneCall *call);
+LINPHONE_DEPRECATED LINPHONE_PUBLIC LinphoneStatus linphone_core_add_to_conference(LinphoneCore *core,
+                                                                                   LinphoneCall *call);
 
 /**
  * Adds all calls into the conference. If no conference is running
@@ -4996,12 +5031,13 @@ LINPHONE_PUBLIC LinphoneStatus linphone_core_add_to_conference(LinphoneCore *cor
  * @param core #LinphoneCore @notnil
  * @return 0 if succeeded. Negative number if failed
  * @warning This function guarantees that the local endpoint is added to the conference.
+ * @deprecated 23/01/2025 Use linphone_conference_invite_participants() instead.
  */
-LINPHONE_PUBLIC LinphoneStatus linphone_core_add_all_to_conference(LinphoneCore *core);
+LINPHONE_DEPRECATED LINPHONE_PUBLIC LinphoneStatus linphone_core_add_all_to_conference(LinphoneCore *core);
 
 /**
  * Removes a call from the conference.
- * @param core the linphone core @notnil
+ * @param core the #LinphoneCore. @notnil
  * @param call a call that has been previously merged into the conference. @notnil
  *
  * After removing the remote participant belonging to the supplied call, the call becomes a normal call in paused state.
@@ -5013,19 +5049,21 @@ LINPHONE_PUBLIC LinphoneStatus linphone_core_add_all_to_conference(LinphoneCore 
  *conference is automatically put in a simple call in running state.
  *
  * @return 0 if successful, -1 otherwise.
+ * @deprecated 23/01/2025 Use linphone_conference_remove_participant_2() instead.
  **/
-LINPHONE_PUBLIC LinphoneStatus linphone_core_remove_from_conference(LinphoneCore *core, LinphoneCall *call);
+LINPHONE_DEPRECATED LINPHONE_PUBLIC LinphoneStatus linphone_core_remove_from_conference(LinphoneCore *core,
+                                                                                        LinphoneCall *call);
 
 /**
  * Indicates whether the local participant is part of a conference.
  * @warning That function automatically fails in the case of conferences using a
  * conferencet server (focus). If you use such a conference, you should use
  * linphone_conference_remove_participant() instead.
- * @param core the linphone core @notnil
+ * @param core the #LinphoneCore. @notnil
  * @return TRUE if the local participant is in a conference, FALSE otherwise.
  * @deprecated 09/03/2021 Use linphone_conference_is_in() instead.
  */
-LINPHONE_PUBLIC bool_t linphone_core_is_in_conference(const LinphoneCore *core);
+LINPHONE_DEPRECATED LINPHONE_PUBLIC bool_t linphone_core_is_in_conference(const LinphoneCore *core);
 
 /**
  * Joins the local participant to the running conference
@@ -5033,7 +5071,7 @@ LINPHONE_PUBLIC bool_t linphone_core_is_in_conference(const LinphoneCore *core);
  * @return 0 if succeeded. Negative number if failed
  * @deprecated 09/03/2021 Use linphone_conference_enter() instead.
  */
-LINPHONE_PUBLIC LinphoneStatus linphone_core_enter_conference(LinphoneCore *core);
+LINPHONE_DEPRECATED LINPHONE_PUBLIC LinphoneStatus linphone_core_enter_conference(LinphoneCore *core);
 
 /**
  * Makes the local participant leave the running conference
@@ -5041,14 +5079,15 @@ LINPHONE_PUBLIC LinphoneStatus linphone_core_enter_conference(LinphoneCore *core
  * @return 0 if succeeded. Negative number if failed
  * @deprecated 09/03/2021 Use linphone_conference_leave() instead.
  */
-LINPHONE_PUBLIC LinphoneStatus linphone_core_leave_conference(LinphoneCore *core);
+LINPHONE_DEPRECATED LINPHONE_PUBLIC LinphoneStatus linphone_core_leave_conference(LinphoneCore *core);
 
 /**
  * Returns the input volume of the local participant
  * @param core #LinphoneCore
  * @return A value inside [0.0 ; 1.0]
+ * @deprecated 23/01/2025 Use linphone_conference_get_input_volume() instead.
  */
-LINPHONE_PUBLIC float linphone_core_get_conference_local_input_volume(LinphoneCore *core);
+LINPHONE_DEPRECATED LINPHONE_PUBLIC float linphone_core_get_conference_local_input_volume(LinphoneCore *core);
 
 /**
  * Terminates the running conference. If it is a local conference, all calls
@@ -5057,8 +5096,9 @@ LINPHONE_PUBLIC float linphone_core_get_conference_local_input_volume(LinphoneCo
  * will be terminated.
  * @param core #LinphoneCore @notnil
  * @return 0 if succeeded. Negative number if failed
+ * @deprecated 23/01/2025 Use linphone_conference_terminate() instead.
  */
-LINPHONE_PUBLIC LinphoneStatus linphone_core_terminate_conference(LinphoneCore *core);
+LINPHONE_DEPRECATED LINPHONE_PUBLIC LinphoneStatus linphone_core_terminate_conference(LinphoneCore *core);
 
 /**
  * Creates some default conference parameters for instanciating a conference with
@@ -5174,10 +5214,10 @@ LINPHONE_PUBLIC int linphone_core_preempt_sound_resources(LinphoneCore *core);
 
 /**
  * Sets the media resources mode. Value values are: unique and shared.
- * When the mode is set to unique, then only one call in the state StreamsRunning is allowed. While acepting a call, the
- * core will try to free media resource used by the current call. If it is unsuccessful, then the call is not accepted.
- * If mode is set to shared, then the media resources of the current call (if any) are not emptied when taking a new
- * call. If the user whishes to free them, he/she is responsible to call linphone_core_preempt_sound_resources
+ * When the mode is set to unique, then only one call in the state StreamsRunning is allowed. While accepting a call,
+ * the core will try to free media resource used by the current call. If it is unsuccessful, then the call is not
+ * accepted. If mode is set to shared, then the media resources of the current call (if any) are not emptied when taking
+ * a new call. If the user whishes to free them, he/she is responsible to call linphone_core_preempt_sound_resources
  * himself/herself
  * @param core A #LinphoneCore object @notnil
  * @param mode the chosen mode
@@ -5550,11 +5590,14 @@ typedef void (*ContactSearchCallback)(LinphoneContactSearch *id,
 
 /**
  * Sets the URI where to download xml configuration file at startup.
+ * http://, https:// and file:// uris are supported.
  * This can also be set from configuration file or factory config file, from [misc] section, item "config-uri".
  * Calling this function does not load the configuration. It will write the value into configuration so that
- *configuration from remote URI will take place at next #LinphoneCore start.
+ * configuration from URI will take place during next linphone_core_start() invocation.
+ * The format the xml file is briefly documented here:
+ * https://wiki.linphone.org/xwiki/wiki/public/view/Lib/Features/Remote%20Provisioning/
  * @param core the #LinphoneCore object @notnil
- * @param uri the http or https uri to use in order to download the configuration. Passing NULL will disable remote
+ * @param uri the uri to use in order to obtain the configuration. Passing NULL will disable remote
  *provisioning. @maybenil
  * @return -1 if uri could not be parsed, 0 otherwise. Note that this does not check validity of URI endpoint nor scheme
  *and download may still fail.
@@ -5833,8 +5876,26 @@ LINPHONE_PUBLIC void linphone_core_enable_video_multicast(LinphoneCore *core, bo
 LINPHONE_PUBLIC bool_t linphone_core_video_multicast_enabled(const LinphoneCore *core);
 
 /**
+ * Enables or disables call ringing.
+ * This value is taken into account from next time call parameters are created.
+ * This feature can also be enabled per-call using #LinphoneCallParams.
+ * @param core the #LinphoneCore @notnil
+ * @param yesno a boolean to indicate whether the feature is to be disabled.
+ * @ingroup media_parameters
+ */
+LINPHONE_PUBLIC void linphone_core_disable_call_ringing(const LinphoneCore *core, bool_t yesno);
+
+/**
+ * Check whether ringing of calls is disabled
+ * @param core #LinphoneCore @notnil
+ * @return TRUE if call ringing is disabled
+ * @ingroup media_parameters
+ **/
+LINPHONE_PUBLIC bool_t linphone_core_call_ringing_disabled(const LinphoneCore *core);
+
+/**
  * Enables or disables call tone indications.
- * This value is taken into account from next tine call parameters are created.
+ * This value is taken into account from next time call parameters are created.
  * This feature can also be enabled per-call using #LinphoneCallParams.
  * @param core the #LinphoneCore @notnil
  * @param yesno a boolean to indicate whether the feature is to be enabled.
@@ -5939,7 +6000,7 @@ LINPHONE_PUBLIC void linphone_core_enable_realtime_text(LinphoneCore *core, bool
  * @return keep alive interval of real time text.
  * @ingroup media_parameters
  */
-LINPHONE_PUBLIC unsigned int linphone_core_realtime_text_get_keepalive_interval(const LinphoneCore *core);
+LINPHONE_PUBLIC unsigned int linphone_core_get_realtime_text_keepalive_interval(const LinphoneCore *core);
 
 /**
  * Set keep alive interval for real time text (RFC4103).
@@ -5947,7 +6008,7 @@ LINPHONE_PUBLIC unsigned int linphone_core_realtime_text_get_keepalive_interval(
  * @param interval The keep alive interval of real time text, 25000 by default.
  * @ingroup network_parameters
  */
-LINPHONE_PUBLIC void linphone_core_realtime_text_set_keepalive_interval(LinphoneCore *core, unsigned int interval);
+LINPHONE_PUBLIC void linphone_core_set_realtime_text_keepalive_interval(LinphoneCore *core, unsigned int interval);
 
 /**
  * Sets http proxy address to be used for signaling during next channel connection. Use
@@ -6182,36 +6243,17 @@ LINPHONE_PUBLIC bctbx_list_t *linphone_core_get_linphone_specs_list(LinphoneCore
  * @addtogroup chatroom
  * @{
  */
-
-/**
- * Create a chat room.
- *
- * @param core A #LinphoneCore object @notnil
- * @param params The chat room creation parameters #LinphoneChatRoomParams @notnil
- * @param localAddr #LinphoneAddress of a local #LinphoneAccount identity or NULL @maybenil
- * @param participants The initial list of participants of the chat room. \bctbx_list{LinphoneAddress} @notnil
- * @return The newly created chat room (can be an existing one if backend is Basic) or NULL. @maybenil
- * @deprecated 22/10/2024, use linphone_core_create_chat_room_7() instead
- * @ingroup chatroom
- */
-LINPHONE_PUBLIC LinphoneChatRoom *linphone_core_create_chat_room_6(LinphoneCore *core,
-                                                                   const LinphoneChatRoomParams *params,
-                                                                   const LinphoneAddress *localAddr,
-                                                                   const bctbx_list_t *participants);
-
 /**
  * Create a chat room.
  *
  * @param core A #LinphoneCore object @notnil
  * @param params The chat room creation parameters #LinphoneConferenceParams @notnil
- * @param localAddr #LinphoneAddress of a local #LinphoneAccount identity or NULL @maybenil
  * @param participants The initial list of participants of the chat room. \bctbx_list{LinphoneAddress} @notnil
  * @return The newly created chat room (can be an existing one if backend is Basic) or NULL. @maybenil
  * @ingroup chatroom
  */
 LINPHONE_PUBLIC LinphoneChatRoom *linphone_core_create_chat_room_7(LinphoneCore *core,
                                                                    const LinphoneConferenceParams *params,
-                                                                   const LinphoneAddress *localAddr,
                                                                    const bctbx_list_t *participants);
 
 /**
@@ -6249,6 +6291,16 @@ LINPHONE_PUBLIC LinphoneChatRoom *linphone_core_search_chat_room_2(const Linphon
                                                                    const LinphoneAddress *localAddr,
                                                                    const LinphoneAddress *remoteAddr,
                                                                    const bctbx_list_t *participants);
+
+/**
+ * Find a chat room by its identifier.
+ *
+ * @param core A #LinphoneCore object @notnil
+ * @param identifier The chat room identifier @notnil
+ * @return A matching chat room or NULL if none matches. @maybenil
+ */
+LINPHONE_PUBLIC LinphoneChatRoom *linphone_core_search_chat_room_by_identifier(const LinphoneCore *core,
+                                                                               const char *identifier);
 
 /**
  * Removes a chatroom including all message history from the LinphoneCore.
@@ -6512,7 +6564,7 @@ LINPHONE_PUBLIC LinphoneFriend *linphone_core_get_friend_by_ref_key(const Linpho
  * Sets the database filename where friends will be stored.
  * If the file does not exist, it will be created.
  * @ingroup initializing
- * @param core the linphone core @notnil
+ * @param core the #LinphoneCore. @notnil
  * @param path filesystem path. @maybenil
  * @deprecated 27/10/2023 Friends are now stored in the main db
  **/
@@ -7236,7 +7288,7 @@ LINPHONE_PUBLIC const LinphoneAudioDevice *linphone_core_get_default_output_audi
 
 /**
  * Sets the default ephemeral message mode
- * @param core the linphone core
+ * @param core the #LinphoneCore. @notnil
  * @param mode default ephemeral message mode #LinphoneChatRoomEphemeralMode
  * @ingroup chatroom
  */
@@ -7245,7 +7297,7 @@ LINPHONE_PUBLIC void linphone_core_chat_room_set_default_ephemeral_mode(Linphone
 
 /**
  * Gets the default ephemeral message mode
- * @param core the linphone core
+ * @param core the #LinphoneCore. @notnil
  * @return the default ephemeral message mode #LinphoneChatRoomEphemeralMode
  * @ingroup chatroom
  **/
@@ -7254,7 +7306,7 @@ linphone_core_chat_room_get_default_ephemeral_mode(const LinphoneCore *core);
 
 /**
  * Set the default ephemeral lifetime in seconds
- * @param core the linphone core
+ * @param core the #LinphoneCore. @notnil
  * @param value lifetime of ephemeral messages in seconds
  * @ingroup chatroom
  */
@@ -7262,7 +7314,7 @@ LINPHONE_PUBLIC void linphone_core_set_default_ephemeral_lifetime(LinphoneCore *
 
 /**
  * Gets the default lifetime of ephemeral messages in seconds
- * @param core the linphone core
+ * @param core the #LinphoneCore. @notnil
  * @return lifetime of ephemeral messages in seconds
  * @ingroup chatroom
  **/
@@ -7303,7 +7355,7 @@ LINPHONE_PUBLIC int linphone_core_get_conference_max_thumbnails(const LinphoneCo
 
 /**
  * Set the default conference layout
- * @param core the linphone core
+ * @param core the #LinphoneCore. @notnil
  * @param value layout
  * @ingroup conference
  */
@@ -7311,7 +7363,7 @@ LINPHONE_PUBLIC void linphone_core_set_default_conference_layout(LinphoneCore *c
 
 /**
  * Gets the default conference layout
- * @param core the linphone core
+ * @param core the #LinphoneCore. @notnil
  * @return conference layout
  * @ingroup conference
  **/
@@ -7323,7 +7375,7 @@ LINPHONE_PUBLIC LinphoneConferenceLayout linphone_core_get_default_conference_la
  * after its end time. Nonetheless a side effect is that there may be a conference that never became active or it was
  * terminate before its due date and time. This timer, if setup, therefore periodically looks for expired conference and
  * cleans then up
- * @param core the linphone core
+ * @param core the #LinphoneCore. @notnil
  * @param seconds period of the timer. A 0 or negative value stops the timer
  * @ingroup conference
  */
@@ -7331,11 +7383,49 @@ LINPHONE_PUBLIC void linphone_core_set_conference_cleanup_period(LinphoneCore *c
 
 /**
  * Gets the conference cleanup timer period
- * @param core the linphone core
- * @return the period of the conference cleanup timer period
+ * @param core the #LinphoneCore. @notnil
+ * @return the period of the conference cleanup timer
  * @ingroup conference
  **/
 LINPHONE_PUBLIC long linphone_core_get_conference_cleanup_period(const LinphoneCore *core);
+
+/**
+ * Set the conference availability before start. It is the number of seconds clients can join the conference before its
+ * actual start time.
+ * @param core the #LinphoneCore. @notnil
+ * @param seconds number of seconds the conference can be joined early. A negative value means always
+ * @ingroup conference
+ * @warning This setting is only applicable to conference servers
+ */
+LINPHONE_PUBLIC void linphone_core_set_conference_availability_before_start(LinphoneCore *core, long seconds);
+
+/**
+ * Gets the conference availability before start
+ * @param core the #LinphoneCore. @notnil
+ * @return the number of seconds the conference can be joined early
+ * @ingroup conference
+ * @warning This setting is only applicable to conference servers
+ **/
+LINPHONE_PUBLIC long linphone_core_get_conference_availability_before_start(const LinphoneCore *core);
+
+/**
+ * Set the conference expire period. It is the number of seconds after the end time or the last participant joined -
+ * whichever is later - the conference cannot be joined anymore
+ * @param core the #LinphoneCore. @notnil
+ * @param seconds number of seconds before the conference expires. A 0 or negative value means immediately after the end
+ * @ingroup conference
+ * @warning This setting is only applicable to conference servers
+ */
+LINPHONE_PUBLIC void linphone_core_set_conference_expire_period(LinphoneCore *core, long seconds);
+
+/**
+ * Gets the conference expire period
+ * @param core the #LinphoneCore. @notnil
+ * @return the number of second after which the conference cannot be joined
+ * @ingroup conference
+ * @warning This setting is only applicable to conference servers
+ **/
+LINPHONE_PUBLIC long linphone_core_get_conference_expire_period(const LinphoneCore *core);
 
 /**
  * Retrieve the conference information linked to the provided URI if any.
@@ -7444,6 +7534,78 @@ LINPHONE_PUBLIC void linphone_core_delete_conference_information(LinphoneCore *c
                                                                  LinphoneConferenceInfo *conference_info);
 
 /**
+ * @addtogroup contacts
+ * @{
+ */
+
+/**
+ * Creates a new CardDAV server params object that may be used later by #LinphoneMagicSearch to query contacts.
+ * @param core #LinphoneCore object. @notnil
+ * @param params the #LinphoneCardDavParams to configure this remote contact directory. @notnil
+ * @return a new #LinphoneRemoteContactDirectory object to configure, and then add using
+ * linphone_core_add_remote_contact_directory(). @notnil
+ */
+LINPHONE_PUBLIC LinphoneRemoteContactDirectory *
+linphone_core_create_card_dav_remote_contact_directory(LinphoneCore *core, LinphoneCardDavParams *params);
+
+/**
+ * Creates a new CardDAV server params object that may be used later by #LinphoneMagicSearch to query contacts.
+ * @param core #LinphoneCore object. @notnil
+ * @param params the #LinphoneLdapParams to configure this remote contact directory. @notnil
+ * @return a new #LinphoneRemoteContactDirectory object to configure, and then add using
+ * linphone_core_add_remote_contact_directory(). @notnil
+ */
+LINPHONE_PUBLIC LinphoneRemoteContactDirectory *
+linphone_core_create_ldap_remote_contact_directory(LinphoneCore *core, LinphoneLdapParams *params);
+
+/**
+ * Adds a #LinphoneRemoteContactDirectory object previously created to the Core, to be used later by
+ * #LinphoneMagicSearch to query contacts using either LDAP or CardDAV.
+ * @param core #LinphoneCore object. @notnil
+ * @param remoteContactDirectory the newly created #LinphoneRemoteContactDirectory to add. @notnil
+ */
+LINPHONE_PUBLIC void linphone_core_add_remote_contact_directory(LinphoneCore *core,
+                                                                LinphoneRemoteContactDirectory *remoteContactDirectory);
+
+/**
+ * Removes a #LinphoneRemoteContactDirectory object previously added to the Core.
+ * @param core #LinphoneCore object. @notnil
+ * @param remoteContactDirectory the #LinphoneRemoteContactDirectory to remove. @notnil
+ */
+LINPHONE_PUBLIC void
+linphone_core_remove_remote_contact_directory(LinphoneCore *core,
+                                              LinphoneRemoteContactDirectory *remoteContactDirectory);
+
+/**
+ * Gets the list of currently configured LDAP or CardDAV remote servers used by #LinphoneMagicSearch.
+ * @param core #LinphoneCore object. @notnil
+ * @return the list of #LinphoneRemoteContactDirectory currently configured, if any.
+ * \bctbx_list{LinphoneRemoteContactDirectory} @maybenil @tobefreed
+ */
+LINPHONE_PUBLIC bctbx_list_t *linphone_core_get_remote_contact_directories(LinphoneCore *core);
+
+/**
+ * Creates a new CardDAV server params object that may be used later by #LinphoneMagicSearch to query contacts.
+ * @param core #LinphoneCore object. @notnil
+ * @return a new #LinphoneCardDavParams object to configure, and then use it to create a #LinphoneRemoteContactDirectory
+ * using linphone_core_create_card_dav_remote_contact_directory(). @notnil
+ */
+LINPHONE_PUBLIC LinphoneCardDavParams *linphone_core_create_card_dav_params(LinphoneCore *core);
+
+/**
+ * Creates a vCard from a text, if possible
+ * @param core #LinphoneCore object. @notnil
+ * @param input the vCard raw text to parse. @notnil
+ * @return a new #LinphoneVcard object if the parsing of the input succeeded, NULL otherwise. @maybenil
+ */
+LINPHONE_PUBLIC LinphoneVcard *linphone_core_create_vcard_from_text(const LinphoneCore *core, const char *input);
+
+/**
+ * @}
+ * End of group contacts
+ */
+
+/**
  * Tells if LDAP is available
  * @param core LinphoneCore object @notnil
  * @ingroup misc
@@ -7474,6 +7636,7 @@ LINPHONE_PUBLIC LinphoneLdapParams *linphone_core_create_ldap_params(LinphoneCor
  *
  * @param core #LinphoneCore object @notnil
  * @return #LinphoneLdap with default values set @notnil @tobefreed
+ * @deprecated 18/11/2024 use linphone_core_create_ldap_remote_contact_directory() instead.
  */
 LINPHONE_PUBLIC LinphoneLdap *linphone_core_create_ldap(LinphoneCore *core);
 
@@ -7483,12 +7646,15 @@ LINPHONE_PUBLIC LinphoneLdap *linphone_core_create_ldap(LinphoneCore *core);
  * @param core #LinphoneCore object @notnil
  * @param params #LinphoneLdapParams object @notnil
  * @return #LinphoneLdap with default values set @notnil @tobefreed
+ * @deprecated 18/11/2024 use linphone_core_create_ldap_remote_contact_directory() instead.
  */
 LINPHONE_PUBLIC LinphoneLdap *linphone_core_create_ldap_with_params(LinphoneCore *core, LinphoneLdapParams *params);
 
 /**
  * Erases all LDAP from the configuration.
  * @param core #LinphoneCore object @notnil
+ * @deprecated 18/11/2024 use linphone_core_remove_remote_contact_directory() instead.
+ *
  **/
 LINPHONE_PUBLIC void linphone_core_clear_ldaps(LinphoneCore *core);
 
@@ -7496,6 +7662,7 @@ LINPHONE_PUBLIC void linphone_core_clear_ldaps(LinphoneCore *core);
  * Add or update a LDAP server and save it to the configuration.
  * @param core #LinphoneCore object @notnil
  * @param ldap The LDAP to add/update. @notnil
+ * @deprecated 18/11/2024 use linphone_core_add_remote_contact_directory() instead.
  **/
 LINPHONE_PUBLIC void linphone_core_add_ldap(LinphoneCore *core, LinphoneLdap *ldap);
 
@@ -7503,6 +7670,7 @@ LINPHONE_PUBLIC void linphone_core_add_ldap(LinphoneCore *core, LinphoneLdap *ld
  * Remove a LDAP from the configuration.
  * @param core #LinphoneCore object @notnil
  * @param ldap The LDAP to remove. @notnil
+ * @deprecated 18/11/2024 use linphone_core_remove_remote_contact_directory() instead.
  **/
 LINPHONE_PUBLIC void linphone_core_remove_ldap(LinphoneCore *core, LinphoneLdap *ldap);
 
@@ -7510,6 +7678,7 @@ LINPHONE_PUBLIC void linphone_core_remove_ldap(LinphoneCore *core, LinphoneLdap 
  * Returns a list of entered LDAPs. Items must be freed with linphone_ldap_unref()
  * @param core The #LinphoneCore object @notnil
  * @return \bctbx_list{LinphoneLdap} @maybenil @tobefreed
+ * @deprecated 18/11/2024 use linphone_core_get_remote_contact_directories() instead.
  **/
 LINPHONE_PUBLIC bctbx_list_t *linphone_core_get_ldap_list(LinphoneCore *core);
 
@@ -7654,6 +7823,22 @@ LINPHONE_PUBLIC void linphone_core_enable_empty_chatrooms_deletion(LinphoneCore 
 LINPHONE_PUBLIC bool_t linphone_core_empty_chatrooms_deletion_enabled(const LinphoneCore *core);
 
 /**
+ * Returns the threshold for sending IMDN to all participants to a #LinphoneChatRoom
+ * @param core A #LinphoneCore object @notnil
+ * @return An integer value telling the threshold for sending IMDN to all participants to a #LinphoneChatRoom
+ * @ingroup chatroom
+ */
+LINPHONE_PUBLIC int linphone_core_get_imdn_to_everybody_threshold(const LinphoneCore *core);
+
+/**
+ * Sets the threshold for sending IMDN to all participants to a #LinphoneChatRoom
+ * @param core A #LinphoneCore object @notnil
+ * @param threshold the threshold for sending IMDN to all participants to a #LinphoneChatRoom
+ * @ingroup chatroom
+ */
+LINPHONE_PUBLIC void linphone_core_set_imdn_to_everybody_threshold(LinphoneCore *core, int threshold);
+
+/**
  * Sets if accounts will wait for network to be connected before trying to REGISTER.
  * @param core the #LinphoneCore
  * @param register_only_when_network_is_up TRUE to wait for an internet connection before trying to REGISTER, FALSE to
@@ -7683,13 +7868,15 @@ LINPHONE_PUBLIC bool_t linphone_core_get_register_only_when_network_is_up(const 
  * @return #LinphoneCall or NULL if no match is found. @maybenil
  * @deprecated 27/10/2020. Use linphone_core_get_call_by_remote_address2() instead.
  */
-LINPHONE_PUBLIC LinphoneCall *linphone_core_find_call_from_uri(const LinphoneCore *core, const char *uri);
+LINPHONE_PUBLIC LINPHONE_DEPRECATED LinphoneCall *linphone_core_find_call_from_uri(const LinphoneCore *core,
+                                                                                   const char *uri);
 
 /**
  * Create some default conference parameters for instanciating a conference with
  *linphone_core_create_conference_with_params().
  * @param core the #LinphoneCore object @notnil
  * @return a #LinphoneConferenceParams object. @notnil
+ * @deprecated 23/07/2024. Use linphone_core_create_conference_params_2() instead.
  **/
 LINPHONE_PUBLIC LINPHONE_DEPRECATED LinphoneConferenceParams *
 linphone_core_create_conference_params(LinphoneCore *core);
@@ -7781,7 +7968,7 @@ LINPHONE_PUBLIC LINPHONE_DEPRECATED const char *linphone_core_get_user_agent_ver
 /**
  * Gets the database filename where friends will be stored.
  * @ingroup initializing
- * @param core the linphone core @notnil
+ * @param core the #LinphoneCore. @notnil
  * @return filesystem path. @maybenil
  * @deprecated 27/10/2023 Friends are now stored in the main db
  **/
@@ -8253,6 +8440,24 @@ LINPHONE_PUBLIC LINPHONE_DEPRECATED LinphoneStatus linphone_core_set_text_codecs
 #define linphone_core_generic_confort_noise_enabled(core) linphone_core_generic_comfort_noise_enabled(core)
 
 /**
+ * Enable text sending via Baudot tones in the audio stream.
+ * @ingroup media_parameters
+ * It is disabled by default.
+ * Enablement requires a SDK built with full Baudot support: -DENABLE_BAUDOT=ON .
+ * @param core #LinphoneCore object @notnil
+ * @param enabled TRUE if enabled, FALSE otherwise.
+ **/
+LINPHONE_PUBLIC void linphone_core_enable_baudot(LinphoneCore *core, bool_t enabled);
+
+/**
+ * Returns enablement of text sending via Baudot tones in the audio stream.
+ * @ingroup media_parameters
+ * @param core #LinphoneCore object @notnil
+ * @return TRUE if text sending via Baudot tones in the audio stream is enabled, FALSE otherwise.
+ **/
+LINPHONE_PUBLIC bool_t linphone_core_baudot_enabled(const LinphoneCore *core);
+
+/**
  * Tells whether the specified payload type is enabled.
  * @param core #LinphoneCore object.
  * @param pt The payload type to check.
@@ -8668,7 +8873,7 @@ LINPHONE_PUBLIC LINPHONE_DEPRECATED void linphone_core_set_preferred_video_size(
  *constraint the sent video size is small. Using this feature increases the CPU consumption, since a rescaling will be
  *done internally.
  * @ingroup media_parameters
- * @param core the linphone core
+ * @param core the #LinphoneCore. @notnil
  * @param vsize the video resolution choosed for capuring and previewing. It can be (0,0) to not request any specific
  *preview size and let the core optimize the processing.
  * @deprecated 28/03/2017 Use #linphone_core_set_preview_video_definition() instead.
@@ -8816,7 +9021,7 @@ LINPHONE_PUBLIC LINPHONE_DEPRECATED void linphone_core_set_linphone_specs(Linpho
 
 /**
  * Set the chat database path.
- * @param core the linphone core
+ * @param core the #LinphoneCore. @notnil
  * @param path the database path
  * @deprecated 10/01/2018: Use only for migration purposes
  * @donotwrap
@@ -8825,12 +9030,28 @@ LINPHONE_DEPRECATED LINPHONE_PUBLIC void linphone_core_set_chat_database_path(Li
 
 /**
  * Get path to the database file used for storing chat messages.
- * @param core the linphone core
+ * @param core the #LinphoneCore. @notnil
  * @return file path or NULL if not exist
  * @deprecated 10/01/2018
  * @donotwrap
  **/
 LINPHONE_DEPRECATED LINPHONE_PUBLIC const char *linphone_core_get_chat_database_path(const LinphoneCore *core);
+
+/**
+ * Returns whether the database is enabled.
+ * @param core the #LinphoneCore @notnil
+ * @return a boolean indicating the enablement of the database.
+ * @ingroup initializing
+ */
+LINPHONE_PUBLIC bool_t linphone_core_database_enabled(const LinphoneCore *core);
+
+/**
+ * Enables or disables database usage. This function can only be called before starting the core up
+ * @param core the #LinphoneCore @notnil
+ * @param value a boolean to indicate whether the database is to be enabled.
+ * @ingroup initializing
+ */
+LINPHONE_PUBLIC void linphone_core_enable_database(LinphoneCore *core, bool_t value);
 
 /**
  * Create a client-side group chat room. When calling this function the chat room is only created
@@ -8844,7 +9065,7 @@ LINPHONE_DEPRECATED LINPHONE_PUBLIC const char *linphone_core_get_chat_database_
  * @param fallback Boolean value telling whether we should plan on being able to fallback to a basic chat room if the
  * client-side group chat room creation fails
  * @return The newly created client-side group chat room. @maybenil
- * @deprecated 02/07/2020, use linphone_core_create_chat_room_6() instead
+ * @deprecated 02/07/2020, use linphone_core_create_chat_room_7() instead
  * @ingroup chatroom
  */
 LINPHONE_PUBLIC LINPHONE_DEPRECATED LinphoneChatRoom *
@@ -8864,7 +9085,7 @@ linphone_core_create_client_group_chat_room(LinphoneCore *core, const char *subj
  * @param encrypted Boolean value telling whether we should apply encryption or not on chat messages sent and received
  * on this room.
  * @return The newly created client-side group chat room. @maybenil
- * @deprecated 02/07/2020, use linphone_core_create_chat_room_6() instead
+ * @deprecated 02/07/2020, use linphone_core_create_chat_room_7() instead
  * @ingroup chatroom
  */
 LINPHONE_PUBLIC LINPHONE_DEPRECATED LinphoneChatRoom *linphone_core_create_client_group_chat_room_2(LinphoneCore *core,
@@ -8882,7 +9103,7 @@ LINPHONE_PUBLIC LINPHONE_DEPRECATED LinphoneChatRoom *linphone_core_create_clien
  * @param subject The subject of the group chat room @notnil
  * @param participants The initial list of participants of the chat room \bctbx_list{LinphoneAddress} @notnil
  * @return The newly created chat room. @maybenil
- * @deprecated 02/07/2020, use linphone_core_create_chat_room_6() instead
+ * @deprecated 02/07/2020, use linphone_core_create_chat_room_7() instead
  * @ingroup chatroom
  */
 LINPHONE_PUBLIC LINPHONE_DEPRECATED LinphoneChatRoom *
@@ -8900,7 +9121,7 @@ linphone_core_create_chat_room(LinphoneCore *core,
  * @param subject The subject of the group chat room @notnil
  * @param participants The initial list of participants of the chat room. \bctbx_list{LinphoneAddress} @notnil
  * @return The newly created chat room. @maybenil
- * @deprecated 02/07/2020, use linphone_core_create_chat_room_6() instead
+ * @deprecated 02/07/2020, use linphone_core_create_chat_room_7() instead
  * @ingroup chatroom
  */
 LINPHONE_PUBLIC LINPHONE_DEPRECATED LinphoneChatRoom *linphone_core_create_chat_room_2(
@@ -8912,7 +9133,7 @@ LINPHONE_PUBLIC LINPHONE_DEPRECATED LinphoneChatRoom *linphone_core_create_chat_
  * @param subject The subject of the group chat room @notnil
  * @param participants The initial list of participants of the chat room. \bctbx_list{LinphoneAddress} @notnil
  * @return The newly created chat room. @maybenil
- * @deprecated 02/07/2020, use linphone_core_create_chat_room_6() instead
+ * @deprecated 02/07/2020, use linphone_core_create_chat_room_7() instead
  * @ingroup chatroom
  */
 LINPHONE_PUBLIC LINPHONE_DEPRECATED LinphoneChatRoom *
@@ -8926,7 +9147,7 @@ linphone_core_create_chat_room_3(LinphoneCore *core, const char *subject, const 
  * @notnil
  * @param participant #LinphoneAddress representing the initial participant to add to the chat room @notnil
  * @return The newly created chat room. @maybenil
- * @deprecated 02/07/2020, use linphone_core_create_chat_room_6() instead
+ * @deprecated 02/07/2020, use linphone_core_create_chat_room_7() instead
  * @ingroup chatroom
  */
 LINPHONE_PUBLIC LINPHONE_DEPRECATED LinphoneChatRoom *
@@ -8940,17 +9161,34 @@ linphone_core_create_chat_room_4(LinphoneCore *core,
  * @param core A #LinphoneCore object @notnil
  * @param participant #LinphoneAddress representing the initial participant to add to the chat room @notnil
  * @return The newly created chat room. @maybenil
- * @deprecated 02/07/2020, use linphone_core_create_chat_room_6() instead
+ * @deprecated 02/07/2020, use linphone_core_create_chat_room_7() instead
  * @ingroup chatroom
  */
 LINPHONE_PUBLIC LINPHONE_DEPRECATED LinphoneChatRoom *
 linphone_core_create_chat_room_5(LinphoneCore *core, const LinphoneAddress *participant);
 
 /**
+ * Create a chat room.
+ *
+ * @param core A #LinphoneCore object @notnil
+ * @param params The chat room creation parameters #LinphoneChatRoomParams @notnil
+ * @param localAddr #LinphoneAddress of a local #LinphoneAccount identity or NULL @maybenil
+ * @param participants The initial list of participants of the chat room. \bctbx_list{LinphoneAddress} @notnil
+ * @return The newly created chat room (can be an existing one if backend is Basic) or NULL. @maybenil
+ * @deprecated 22/10/2024, use linphone_core_create_chat_room_7() instead
+ * @ingroup chatroom
+ */
+LINPHONE_PUBLIC LINPHONE_DEPRECATED LinphoneChatRoom *
+linphone_core_create_chat_room_6(LinphoneCore *core,
+                                 const LinphoneChatRoomParams *params,
+                                 const LinphoneAddress *localAddr,
+                                 const bctbx_list_t *participants);
+
+/**
  * Get a chat room whose peer is the supplied address. If it does not exist yet, it will be created as a basic chat
  *room. No reference is transferred to the application. The #LinphoneCore keeps a reference on the chat room.
  * @warning This method is prone to errors, use linphone_core_search_chat_room() instead
- * @param core the linphone core @notnil
+ * @param core the #LinphoneCore. @notnil
  * @param addr a linphone address. @notnil
  * @return #LinphoneChatRoom where messaging can take place. @maybenil
  * @deprecated 02/07/2020, use linphone_core_search_chat_room() instead
@@ -8963,7 +9201,7 @@ LINPHONE_PUBLIC LINPHONE_DEPRECATED LinphoneChatRoom *linphone_core_get_chat_roo
  * Get a chat room. If it does not exist yet, it will be created as a basic chat room.
  * No reference is transferred to the application. The #LinphoneCore keeps a reference on the chat room.
  * @warning This method is prone to errors, use linphone_core_search_chat_room() instead
- * @param core the linphone core @notnil
+ * @param core the #LinphoneCore. @notnil
  * @param peer_addr a linphone address. @notnil
  * @param local_addr a linphone address. @notnil
  * @return #LinphoneChatRoom where messaging can take place. @maybenil
@@ -8990,7 +9228,7 @@ LINPHONE_PUBLIC LINPHONE_DEPRECATED LinphoneChatRoom *linphone_core_get_chat_roo
 /**
  * Find a chat room.
  * No reference is transferred to the application. The #LinphoneCore keeps a reference on the chat room.
- * @param core the linphone core @notnil
+ * @param core the #LinphoneCore. @notnil
  * @param peer_addr a linphone address. @notnil
  * @param local_addr a linphone address. @notnil
  * @return #LinphoneChatRoom where messaging can take place. @maybenil
@@ -9004,7 +9242,7 @@ LINPHONE_PUBLIC LINPHONE_DEPRECATED LinphoneChatRoom *linphone_core_find_chat_ro
 /**
  * Find a one to one chat room.
  * No reference is transferred to the application. The #LinphoneCore keeps a reference on the chat room.
- * @param core the linphone core @notnil
+ * @param core the #LinphoneCore. @notnil
  * @param local_addr a linphone address. @notnil
  * @param participant_addr a linphone address. @notnil
  * @return #LinphoneChatRoom where messaging can take place. @maybenil
@@ -9018,7 +9256,7 @@ LINPHONE_PUBLIC LINPHONE_DEPRECATED LinphoneChatRoom *linphone_core_find_one_to_
 /**
  * Find a one to one chat room.
  * No reference is transferred to the application. The #LinphoneCore keeps a reference on the chat room.
- * @param core the linphone core @notnil
+ * @param core the #LinphoneCore. @notnil
  * @param local_addr a linphone address. @notnil
  * @param participant_addr a linphone address. @notnil
  * @param encrypted whether to look for an encrypted chat room or not
@@ -9034,7 +9272,7 @@ linphone_core_find_one_to_one_chat_room_2(const LinphoneCore *core,
 
 /**
  * Returns how many attachments are yet to be downloaded
- * @param core the linphone core @notnil
+ * @param core the #LinphoneCore. @notnil
  * @return how many attachments are yet to be downloaded.
  * @ingroup chatroom
  **/
@@ -9042,7 +9280,7 @@ LINPHONE_PUBLIC unsigned int linphone_core_get_remaining_download_file_count(Lin
 
 /**
  * Returns how many attachments are yet to be uploaded
- * @param core the linphone core @notnil
+ * @param core the #LinphoneCore. @notnil
  * @return how many attachments are yet to be uploaded.
  * @ingroup chatroom
  **/
@@ -9121,7 +9359,7 @@ LINPHONE_PUBLIC LINPHONE_DEPRECATED LinphoneOnlineStatus linphone_core_get_prese
  * Sets the database filename where call logs will be stored.
  * If the file does not exist, it will be created.
  * @ingroup initializing
- * @param core the linphone core @notnil
+ * @param core the #LinphoneCore. @notnil
  * @param path filesystem path @maybenil
  * @deprecated 07/12/2021: Use only for migration purposes
  **/
@@ -9131,7 +9369,7 @@ LINPHONE_PUBLIC LINPHONE_DEPRECATED void linphone_core_set_call_logs_database_pa
 /**
  * Gets the database filename where call logs will be stored.
  * @ingroup initializing
- * @param core the linphone core @notnil
+ * @param core the #LinphoneCore. @notnil
  * @return filesystem path. @maybenil
  * @deprecated 07/12/2021: Use only for migration purposes
  **/
@@ -9142,7 +9380,7 @@ LINPHONE_PUBLIC LINPHONE_DEPRECATED const char *linphone_core_get_call_logs_data
  * @param core the #LinphoneCore
  * @param xml_body the string containing the XML body @notnil
  * @return The #LinphoneEktInfo @maybenil
- * @ingroup ekt_info_api
+ * @ingroup ekt_api
  */
 LINPHONE_PUBLIC const LinphoneEktInfo *linphone_core_create_ekt_info_from_xml(const LinphoneCore *core,
                                                                               const char *xml_body);
@@ -9152,9 +9390,39 @@ LINPHONE_PUBLIC const LinphoneEktInfo *linphone_core_create_ekt_info_from_xml(co
  * @param core the #LinphoneCore
  * @param ekt_info the #LinphoneEktInfo @notnil
  * @return The XML body @maybenil @tobefreed
- * @ingroup ekt_info_api
+ * @deprecated 06/02/2025 use linphone_core_create_xml_from_ekt_info_2().
+ * @ingroup ekt_api
  */
-LINPHONE_PUBLIC char *linphone_core_create_xml_from_ekt_info(const LinphoneCore *core, const LinphoneEktInfo *ekt_info);
+LINPHONE_PUBLIC LINPHONE_DEPRECATED char *linphone_core_create_xml_from_ekt_info(const LinphoneCore *core,
+                                                                                 const LinphoneEktInfo *ekt_info);
+
+/**
+ * Gets an XML body using a specific account
+ * @param core the #LinphoneCore
+ * @param ekt_info the #LinphoneEktInfo @notnil
+ * @param account the #LinphoneAccount associated with the conference @maybenil
+ * @return The XML body @maybenil @tobefreed
+ * @ingroup ekt_api
+ */
+LINPHONE_PUBLIC char *linphone_core_create_xml_from_ekt_info_2(const LinphoneCore *core,
+                                                               const LinphoneEktInfo *ekt_info,
+                                                               const LinphoneAccount *account);
+
+/**
+ * Gets if the EKT plugin is currently loaded in the Linphone core instance.
+ * @param core the #LinphoneCore
+ * @return true if the EKT plugin is loaded
+ * @ingroup ekt_api
+ */
+LINPHONE_PUBLIC bool_t linphone_core_is_ekt_plugin_loaded(const LinphoneCore *core);
+
+/**
+ * sets the state of the EKT plugin in the Linphone core instance.
+ * @param core the #LinphoneCore
+ * @param ekt_plugin_loaded whether the EKT plugin is loaded or not
+ * @ingroup ekt_api
+ */
+LINPHONE_PUBLIC void linphone_core_set_ekt_plugin_loaded(LinphoneCore *core, bool_t ekt_plugin_loaded);
 
 #ifdef __cplusplus
 }

@@ -40,23 +40,24 @@ Participant::Participant(const std::shared_ptr<Conference> conference, const std
 }
 
 Participant::Participant(const std::shared_ptr<Conference> conference,
-                         const std::shared_ptr<Address> &address,
+                         const std::shared_ptr<const Address> &address,
                          std::shared_ptr<CallSession> callSession)
     : Participant(conference, address) {
 	session = callSession;
 }
 
-Participant::Participant(std::shared_ptr<Address> address) : addr(address) {
+Participant::Participant(std::shared_ptr<Address> address) : mAddress(address) {
 	L_ASSERT(address->getDisplayNameCstr() == nullptr);
 	L_ASSERT(!address->hasUriParam("gr"));
 }
 
 Participant::~Participant() {
-	bctbx_debug("Destroying participant [%p] (address: %s)", this, (addr) ? addr->toString().c_str() : "sip:unknown");
+	lDebug() << "Destroying " << *this;
 }
 
 void Participant::configure(const std::shared_ptr<Conference> conference,
                             const std::shared_ptr<const Address> &address) {
+	mAddress = Address::create(address->getUriWithoutGruu());
 	setConference(conference);
 	if (conference) {
 		const auto &conferenceParams = conference->getCurrentParams();
@@ -64,28 +65,21 @@ void Participant::configure(const std::shared_ptr<Conference> conference,
 			mRole = Participant::Role::Speaker;
 		}
 	}
-	auto identityAddress = Address::create(address->getUriWithoutGruu());
-	addr = identityAddress;
 }
 
 // =============================================================================
 
-shared_ptr<CallSession> Participant::createSession(const Conference &conference,
-                                                   const CallSessionParams *params,
-                                                   bool hasMedia,
-                                                   CallSessionListener *listener) {
-	session = createSession(conference.getCore(), params, hasMedia, listener);
-	return session;
+shared_ptr<CallSession>
+Participant::createSession(const Conference &conference, const CallSessionParams *params, bool hasMedia) {
+	return createSession(conference.getCore(), params, hasMedia);
 }
 
-shared_ptr<CallSession> Participant::createSession(const std::shared_ptr<Core> &core,
-                                                   const CallSessionParams *params,
-                                                   bool hasMedia,
-                                                   CallSessionListener *listener) {
+shared_ptr<CallSession>
+Participant::createSession(const std::shared_ptr<Core> &core, const CallSessionParams *params, bool hasMedia) {
 	if (hasMedia && (!params || dynamic_cast<const MediaSessionParams *>(params))) {
-		session = make_shared<MediaSession>(core, getSharedFromThis(), params, listener);
+		session = make_shared<MediaSession>(core, getSharedFromThis(), params);
 	} else {
-		session = make_shared<CallSession>(core, params, listener);
+		session = make_shared<CallSession>(core, params);
 	}
 	return session;
 }
@@ -115,7 +109,8 @@ std::shared_ptr<ParticipantDevice> Participant::addDevice(const std::shared_ptr<
 	} else if (gruu->isValid()) {
 		newDevice = addDevice(gruu, name);
 	} else {
-		lError() << "Attempting to add a device that has neither call session associated nor a valid address";
+		lError() << "Attempting to add " << *device << " to " << *this
+		         << " that has neither call session associated nor a valid address";
 		return nullptr;
 	}
 
@@ -136,11 +131,11 @@ std::shared_ptr<ParticipantDevice> Participant::addDevice(const std::shared_ptr<
 	shared_ptr<ParticipantDevice> device = findDevice(session, false);
 	if (device) return device;
 	if (getCore() && (linphone_core_get_global_state(getCore()->getCCore()) == LinphoneGlobalOn)) {
-		lInfo() << "Add device " << (name.empty() ? "<no-name>" : name) << " with session " << session
-		        << " to participant " << *getAddress();
+		lInfo() << "Add device " << (name.empty() ? "<no-name>" : name) << " with session " << session << " to "
+		        << *this;
 	} else {
-		lDebug() << "Add device " << (name.empty() ? "<no-name>" : name) << " with session " << session
-		         << " to participant " << getAddress()->toString();
+		lDebug() << "Add device " << (name.empty() ? "<no-name>" : name) << " with session " << session << " to "
+		         << *this;
 	}
 	device = ParticipantDevice::create(getSharedFromThis(), session, name);
 	devices.push_back(device);
@@ -155,13 +150,13 @@ std::shared_ptr<ParticipantDevice> Participant::addDevice(const std::shared_ptr<
 	 * we cannot afford to call Address:toString() for nothing when logs are disabled */
 	if (getCore() && (linphone_core_get_global_state(getCore()->getCCore()) == LinphoneGlobalOn)) {
 		if (bctbx_log_level_enabled(BCTBX_LOG_DOMAIN, BCTBX_LOG_MESSAGE)) {
-			lInfo() << "Add device " << (name.empty() ? "<no-name>" : name) << " with address " << *gruu
-			        << " to participant " << *getAddress();
+			lInfo() << "Add device " << (name.empty() ? "<no-name>" : name) << " with address " << *gruu << " to "
+			        << *this;
 		}
 	} else {
 		if (bctbx_log_level_enabled(BCTBX_LOG_DOMAIN, BCTBX_LOG_DEBUG)) {
-			lDebug() << "Add device " << (name.empty() ? "<no-name>" : name) << " with address " << *gruu
-			         << " to participant " << *getAddress();
+			lDebug() << "Add device " << (name.empty() ? "<no-name>" : name) << " with address " << *gruu << " to "
+			         << *this;
 		}
 	}
 	device = ParticipantDevice::create(getSharedFromThis(), gruu, name);
@@ -176,7 +171,7 @@ void Participant::clearDevices() {
 shared_ptr<ParticipantDevice>
 Participant::findDevice(const LinphoneStreamType type, const std::string &label, const bool logFailure) const {
 	for (const auto &device : devices) {
-		const auto &deviceLabel = device->getLabel(type);
+		const auto &deviceLabel = device->getStreamLabel(type);
 		const auto &thumbnailLabel = device->getThumbnailStreamLabel();
 		if (!label.empty() && ((!deviceLabel.empty() && deviceLabel.compare(label) == 0) ||
 		                       ((type == LinphoneStreamTypeVideo) && (thumbnailLabel == label)))) {
@@ -184,8 +179,7 @@ Participant::findDevice(const LinphoneStreamType type, const std::string &label,
 		}
 	}
 	if (logFailure) {
-		lInfo() << "Unable to find device with label " << label << " among those belonging to participant "
-		        << *getAddress();
+		lInfo() << "Unable to find device with label " << label << " among those belonging to " << *this;
 	}
 	return nullptr;
 }
@@ -195,8 +189,7 @@ shared_ptr<ParticipantDevice> Participant::findDeviceByCallId(const std::string 
 		if (device->getCallId() == callId) return device;
 	}
 	if (logFailure) {
-		lInfo() << "Unable to find device with call id " << callId << " among those belonging to participant "
-		        << *getAddress();
+		lInfo() << "Unable to find device with call id " << callId << " among those belonging to " << *this;
 	}
 	return nullptr;
 }
@@ -217,8 +210,7 @@ shared_ptr<ParticipantDevice> Participant::findDevice(const std::shared_ptr<cons
 	}
 
 	if (logFailure) {
-		lInfo() << "Unable to find device with address " << *gruu << " among those belonging to participant "
-		        << *getAddress();
+		lInfo() << "Unable to find device with address " << *gruu << " among those belonging to " << *this;
 	}
 	return nullptr;
 }
@@ -233,7 +225,7 @@ shared_ptr<ParticipantDevice> Participant::findDevice(const shared_ptr<const Cal
 	}
 
 	if (logFailure) {
-		lInfo() << "Unable to find device with call session " << session;
+		lInfo() << "Unable to find device with call session " << session << " among those belonging to " << *this;
 	}
 	return nullptr;
 }
@@ -258,11 +250,11 @@ void Participant::removeDevice(const std::shared_ptr<Address> &gruu) {
 // -----------------------------------------------------------------------------
 
 void Participant::setAddress(const std::shared_ptr<Address> &newAddr) {
-	addr = Address::create(newAddr->getUriWithoutGruu());
+	mAddress = Address::create(newAddr->getUriWithoutGruu());
 }
 
 const std::shared_ptr<Address> &Participant::getAddress() const {
-	return addr;
+	return mAddress;
 }
 
 AbstractChatRoom::SecurityLevel Participant::getSecurityLevel() const {
@@ -273,7 +265,7 @@ AbstractChatRoom::SecurityLevel
 Participant::getSecurityLevelExcept(const std::shared_ptr<ParticipantDevice> &ignoredDevice) const {
 	auto encryptionEngine = getCore()->getEncryptionEngine();
 	if (!encryptionEngine) {
-		lWarning() << "Asking participant security level but there is no encryption engine enabled";
+		lWarning() << *this << ": Asking participant security level but there is no encryption engine enabled";
 		return AbstractChatRoom::SecurityLevel::ClearText;
 	}
 
@@ -300,8 +292,7 @@ std::shared_ptr<Core> Participant::getCore() const {
 
 std::shared_ptr<Conference> Participant::getConference() const {
 	if (mConference.expired()) {
-		lDebug() << "The conference owning participant " << this << " (address " << *getAddress()
-		         << ") has already been deleted";
+		lDebug() << "The conference owning participant " << *this << " has already been deleted";
 	}
 	return mConference.lock();
 }
@@ -338,8 +329,16 @@ void Participant::setUserData(void *ud) {
 	mUserData = ud;
 }
 
+void Participant::setSequenceNumber(const int nb) {
+	mSequence = nb;
+};
+
+int Participant::getSequenceNumber() const {
+	return mSequence;
+};
+
 void Participant::setRole(Participant::Role role) {
-	lInfo() << "Changing role of participant " << *getAddress() << " from " << Participant::roleToText(mRole) << " to "
+	lInfo() << "Changing role of " << *this << " from " << Participant::roleToText(mRole) << " to "
 	        << Participant::roleToText(role);
 	mRole = role;
 }

@@ -34,6 +34,12 @@ public:
 	virtual ~NotifyConferenceListener() = default;
 
 	/*
+	 * This fonction is called each time the list of allowed participant is changed while the conference is active
+	 * @param[in] event informations related to the change of the participant allowed to join the conference. @notnil
+	 */
+	virtual void onAllowedParticipantListChanged(const std::shared_ptr<ConferenceNotifiedEvent> &event) override;
+
+	/*
 	 * This fonction is called each time a new participant is added by the focus after full state notification.
 	 * @param[in] event informations related to the added participant. @notnil
 	 * @param[in] participant participant added to conference or chat room. @notnil
@@ -108,6 +114,15 @@ public:
 	 */
 	virtual void onParticipantDeviceRemoved(const std::shared_ptr<ConferenceParticipantDeviceEvent> &event,
 	                                        const std::shared_ptr<ParticipantDevice> &device) override;
+
+	/*
+	 * This fonction is called each time a new participant device that is not in the allowed participants'list calls a
+	 * closed-list conference
+	 * @param[in] event informations related to the removed device's participant. @notnil
+	 * @param[in] device participant device that is not in the allowed participants'list. @notnil
+	 */
+	virtual void onParticipantDeviceJoiningRequest(const std::shared_ptr<ConferenceParticipantDeviceEvent> &event,
+	                                               const std::shared_ptr<ParticipantDevice> &device) override;
 
 	/*
 	 * This fonction is called each time a new participant device changed its media availability after full state

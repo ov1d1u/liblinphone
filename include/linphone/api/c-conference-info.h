@@ -61,6 +61,14 @@ LINPHONE_PUBLIC void linphone_conference_info_unref(LinphoneConferenceInfo *conf
 /**
  * Retrieve the organizer of the conference.
  * @param conference_info The #LinphoneConferenceInfo object. @notnil
+ * @return The #LinphoneParticipantInfo of the conference's organizer. @maybenil
+ */
+LINPHONE_PUBLIC const LinphoneParticipantInfo *
+linphone_conference_info_get_organizer_info(const LinphoneConferenceInfo *conference_info);
+
+/**
+ * Retrieve the organizer of the conference.
+ * @param conference_info The #LinphoneConferenceInfo object. @notnil
  * @return The #LinphoneAddress of the conference's organizer. @maybenil
  */
 LINPHONE_PUBLIC const LinphoneAddress *
@@ -210,6 +218,21 @@ LINPHONE_PUBLIC const char *linphone_conference_info_get_subject(const LinphoneC
 LINPHONE_PUBLIC void linphone_conference_info_set_subject(LinphoneConferenceInfo *conference_info, const char *subject);
 
 /**
+ * Retrieve the subject of the conference.
+ * @param conference_info The #LinphoneConferenceInfo object. @notnil
+ * @return The subject of the conference. @maybenil
+ */
+LINPHONE_PUBLIC const char *linphone_conference_info_get_subject_utf8(const LinphoneConferenceInfo *conference_info);
+
+/**
+ * Set the subject of the conference.
+ * @param conference_info The #LinphoneConferenceInfo object. @notnil
+ * @param subject The subject of the conference. @maybenil
+ */
+LINPHONE_PUBLIC void linphone_conference_info_set_subject_utf8(LinphoneConferenceInfo *conference_info,
+                                                               const char *subject);
+
+/**
  * Set the CCMP URI of the conference.
  * @param conference_info The #LinphoneConferenceInfo object. @notnil
  * @param uri The URI of the conference in the CCMP server. @maybenil
@@ -237,6 +260,22 @@ LINPHONE_PUBLIC const char *linphone_conference_info_get_description(const Linph
  */
 LINPHONE_PUBLIC void linphone_conference_info_set_description(LinphoneConferenceInfo *conference_info,
                                                               const char *description);
+
+/**
+ * Retrieve the description of the conference.
+ * @param conference_info The #LinphoneConferenceInfo object. @notnil
+ * @return The description of the conference. @maybenil
+ */
+LINPHONE_PUBLIC const char *
+linphone_conference_info_get_description_utf8(const LinphoneConferenceInfo *conference_info);
+
+/**
+ * Set the description of the conference.
+ * @param conference_info The #LinphoneConferenceInfo object. @notnil
+ * @param description The description of the conference. @maybenil
+ */
+LINPHONE_PUBLIC void linphone_conference_info_set_description_utf8(LinphoneConferenceInfo *conference_info,
+                                                                   const char *description);
 
 /**
  * Retrieve the desired security level of the conference.
@@ -292,6 +331,19 @@ LINPHONE_PUBLIC char *linphone_conference_info_get_icalendar_string(const Linpho
 LINPHONE_PUBLIC LinphoneConferenceInfoState
 linphone_conference_info_get_state(const LinphoneConferenceInfo *conference_info);
 
+/**
+ * Store the ICS UID in the conference info
+ * @param conference_info The #LinphoneConferenceInfo object. @notnil
+ * @param uid the ICS UID to be associated to the #LinphoneConferenceInfo object. @maybenil
+ */
+LINPHONE_PUBLIC void linphone_conference_info_set_ics_uid(LinphoneConferenceInfo *conference_info, const char *uid);
+
+/**
+ * Retrieve the ICS UID linked to a conference info
+ * @param conference_info The #LinphoneConferenceInfo object. @notnil
+ * @return the ICS UID. @maybenil
+ */
+LINPHONE_PUBLIC const char *linphone_conference_info_get_ics_uid(const LinphoneConferenceInfo *conference_info);
 /**
  * @}
  */

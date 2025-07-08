@@ -52,6 +52,11 @@ const char *linphone_vcard_as_vcard4_string(LinphoneVcard *vCard) {
 	return L_STRING_TO_C(Vcard::toCpp(vCard)->asVcard4String());
 }
 
+const char *linphone_vcard_as_vcard4_string_with_base_64_picture(LinphoneVcard *vCard) {
+	if (!vCard) return nullptr;
+	return L_STRING_TO_C(Vcard::toCpp(vCard)->asVcard4StringWithBase64Picture());
+}
+
 void *linphone_vcard_get_belcard(LinphoneVcard *vCard) {
 	return Vcard::toCpp(vCard)->getBelcard();
 }
@@ -104,7 +109,7 @@ void linphone_vcard_edit_main_sip_address(LinphoneVcard *vCard, const char *sip_
 const bctbx_list_t *linphone_vcard_get_sip_addresses(LinphoneVcard *vCard) {
 	if (!vCard) return nullptr;
 	Vcard::toCpp(vCard)->getSipAddresses();
-	return Vcard::toCpp(vCard)->mBctbxSipAddressesCache;
+	return Vcard::toCpp(vCard)->mSipAddresses.getCList();
 }
 
 void linphone_vcard_add_phone_number(LinphoneVcard *vCard, const char *phone) {

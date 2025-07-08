@@ -252,6 +252,8 @@ void Ics::Icalendar::setMethod(const std::string &method) {
 		setMethod(Ics::Icalendar::Method::Request);
 	} else if (method.compare("CANCEL") == 0) {
 		setMethod(Ics::Icalendar::Method::Cancel);
+	} else if (method.compare("RETRIEVE") == 0) {
+		setMethod(Ics::Icalendar::Method::Retrieve);
 	} else {
 		lError() << "ICS method " << method << " is not currently supported";
 	}
@@ -320,8 +322,8 @@ std::shared_ptr<ConferenceInfo> Ics::Icalendar::toConferenceInfo() const {
 		}
 	}
 
-	confInfo->setSubject(event->getSummary());
-	confInfo->setDescription(event->getDescription());
+	confInfo->setUtf8Subject(event->getUtf8Summary());
+	confInfo->setUtf8Description(event->getUtf8Description());
 
 	tm dur = event->getDuration();
 	int duration = dur.tm_hour * 60 + dur.tm_min + dur.tm_sec / 60;
@@ -356,6 +358,7 @@ std::shared_ptr<ConferenceInfo> Ics::Icalendar::toConferenceInfo() const {
 
 	ConferenceInfo::State state = ConferenceInfo::State::New;
 	switch (mMethod) {
+		case Ics::Icalendar::Method::Retrieve:
 		case Ics::Icalendar::Method::Request:
 			state = ((event->getSequence() == 0) ? ConferenceInfo::State::New : ConferenceInfo::State::Updated);
 			break;
@@ -383,6 +386,8 @@ ostream &operator<<(ostream &stream, Ics::Icalendar::Method method) {
 			return stream << "REQUEST";
 		case Ics::Icalendar::Method::Cancel:
 			return stream << "CANCEL";
+		case Ics::Icalendar::Method::Retrieve:
+			return stream << "RETRIEVE";
 	}
 	return stream;
 }

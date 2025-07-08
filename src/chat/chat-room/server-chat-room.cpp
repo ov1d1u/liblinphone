@@ -57,30 +57,6 @@ ServerChatRoom::ServerChatRoom(const std::shared_ptr<Core> &core, const std::sha
 	mProtocolVersion = CorePrivate::groupChatProtocolVersion;
 }
 
-ServerChatRoom::ServerChatRoom(const shared_ptr<Core> &core,
-                               const std::shared_ptr<Address> &peerAddress,
-                               const shared_ptr<ConferenceParams> &params,
-                               const string &subject,
-                               list<shared_ptr<Participant>> &&participants,
-                               unsigned int lastNotifyId)
-    : ChatRoom(core, (new ServerConference(core, peerAddress, nullptr, params))->toSharedPtr()) {
-	auto &confParams = getConference()->mConfParams;
-	confParams->enableChat(true);
-	confParams->enableVideo(false);
-	confParams->enableAudio(false);
-	confParams->setUtf8Subject(subject);
-	getConference()->init(nullptr, getConference().get());
-	for (const auto &p : participants) {
-		addCachedParticipant(std::move(p));
-	}
-	getConference()->setLastNotify(lastNotifyId);
-	getConference()->setConferenceId(ConferenceId(peerAddress, peerAddress));
-	confParams->setConferenceAddress(peerAddress);
-	getCore()->getPrivate()->serverListEventHandler->addHandler(
-	    static_pointer_cast<ServerConference>(getConference())->eventHandler);
-	mProtocolVersion = CorePrivate::groupChatProtocolVersion;
-}
-
 ServerChatRoom::~ServerChatRoom() {
 	lInfo() << this << " destroyed.";
 };
@@ -96,7 +72,7 @@ void ServerChatRoom::confirmCreation() {
 void ServerChatRoom::confirmRecreation(SalCallOp *op) {
 	const auto from = Address::create(op->getFrom());
 	const auto to = Address::create(op->getTo());
-	auto participant = findCachedParticipant(from);
+	auto participant = getConference()->findInvitedParticipant(from);
 	if (!participant) {
 		lError() << this << " bug - " << *from << " is not a participant.";
 		op->decline(SalReasonInternalError, "");
@@ -105,17 +81,13 @@ void ServerChatRoom::confirmRecreation(SalCallOp *op) {
 
 	lInfo() << this << " is re-joined by " << *participant->getAddress();
 	shared_ptr<Participant> me = getConference()->getMe();
-	shared_ptr<CallSession> session = me->createSession(*getConference().get(), nullptr, false, getConference().get());
+	shared_ptr<CallSession> session = me->createSession(*getConference().get(), nullptr, false);
+	session->addListener(getConference());
 	session->configure(LinphoneCallIncoming, nullptr, op, from, to);
 	session->startIncomingNotification(false);
 	auto confAddr = *getConference()->getConferenceAddress();
-	confAddr.setParam("isfocus");
+	confAddr.setParam(Conference::IsFocusParameter);
 	session->redirect(confAddr);
-}
-
-void ServerChatRoom::subscriptionStateChanged(const shared_ptr<EventSubscribe> &event,
-                                              LinphoneSubscriptionState state) {
-	static_pointer_cast<ServerConference>(getConference())->eventHandler->subscriptionStateChanged(event, state);
 }
 
 // -----------------------------------------------------------------------------
@@ -173,7 +145,7 @@ void ServerChatRoom::finalizeCreation() {
 /*
  * This method is to be called by the conference server when it is notified that a device has just registered*/
 void ServerChatRoom::notifyParticipantDeviceRegistration(const std::shared_ptr<const Address> &participantDevice) {
-	shared_ptr<Participant> participant = findCachedParticipant(participantDevice);
+	shared_ptr<Participant> participant = getConference()->findInvitedParticipant(participantDevice);
 	if (!participant) {
 		lError() << this << ": " << *participantDevice << " is not part of the chatroom.";
 		return;
@@ -269,7 +241,7 @@ void ServerChatRoom::unSubscribeRegistrationForParticipant(BCTBX_UNUSED(const st
 		return;
 	}
 	mRegistrationSubscriptions.erase(p);
-	removeCachedParticipant(identAddress);
+	getConference()->removeInvitedParticipant(identAddress);
 
 	LinphoneAddress *laddr = identAddress->toC();
 	LINPHONE_HYBRID_OBJECT_INVOKE_CBS(ChatRoom, getSharedFromThis(),
@@ -281,7 +253,7 @@ void ServerChatRoom::unSubscribeRegistrationForParticipant(BCTBX_UNUSED(const st
  * This function setups registration subscriptions if not already there.
  * If no registration subscription is started (because they were all running already), it returns false.
  * newInvited specifies whether these participants are in the process of being invited, in which case they will be
- * automatically added to the invitedParticipants list, so that when registration info arrives, they
+ * automatically added to the mRegistrationSubscriptionParticipants list, so that when registration info arrives, they
  * will be added.
  */
 bool ServerChatRoom::subscribeRegistrationForParticipants(
@@ -301,7 +273,7 @@ bool ServerChatRoom::subscribeRegistrationForParticipants(
 		const auto cleanedAddr = addr->getUri();
 		if (mRegistrationSubscriptions.find(cleanedAddr.toString()) == mRegistrationSubscriptions.end()) {
 			requestedAddresses.emplace_back(cleanedAddr);
-			if (newInvited) invitedParticipants.emplace_back(cleanedAddr);
+			if (newInvited) mRegistrationSubscriptionParticipants.emplace_back(cleanedAddr);
 			mUnnotifiedRegistrationSubscriptions++;
 			subscriptionsPending = true;
 		}
@@ -318,11 +290,12 @@ bool ServerChatRoom::subscribeRegistrationForParticipants(
 	return subscriptionsPending;
 }
 
-bool ServerChatRoom::removeInvitedParticipants(const std::shared_ptr<Address> &participantAddress) {
+bool ServerChatRoom::removeRegistrationSubscriptionParticipant(const std::shared_ptr<Address> &participantAddress) {
 	// Check if this registration information is for a participant in the process of being added.
-	auto it = std::find(invitedParticipants.begin(), invitedParticipants.end(), *participantAddress);
-	if (it != invitedParticipants.end()) {
-		invitedParticipants.erase(it);
+	auto it = std::find(mRegistrationSubscriptionParticipants.begin(), mRegistrationSubscriptionParticipants.end(),
+	                    *participantAddress);
+	if (it != mRegistrationSubscriptionParticipants.end()) {
+		mRegistrationSubscriptionParticipants.erase(it);
 		mUnnotifiedRegistrationSubscriptions--;
 		return true;
 	}
@@ -349,44 +322,6 @@ bool ServerChatRoom::hasBeenLeft() const {
 
 bool ServerChatRoom::isReadOnly() const {
 	return false;
-}
-
-void ServerChatRoom::addCachedParticipant(const std::shared_ptr<Participant> &participant) {
-	mCachedParticipants.push_back(participant);
-}
-
-void ServerChatRoom::removeCachedParticipant(const std::shared_ptr<Address> &address) {
-	auto c = std::find_if(mCachedParticipants.begin(), mCachedParticipants.end(),
-	                      [&address](const auto &p) { return (address->weakEqual(*p->getAddress())); });
-	if (c == mCachedParticipants.end()) {
-		lDebug() << "Unable to find participant " << *address << " in the list of cached participants";
-	} else {
-		mCachedParticipants.erase(c);
-	}
-}
-
-std::list<std::shared_ptr<Participant>> ServerChatRoom::getCachedParticipants() const {
-	return mCachedParticipants;
-}
-
-shared_ptr<Participant>
-ServerChatRoom::findCachedParticipant(const std::shared_ptr<const Address> &participantAddress) const {
-	for (const auto &participant : mCachedParticipants) {
-		if (participant->getAddress()->weakEqual(*participantAddress)) return participant;
-	}
-	return nullptr;
-}
-
-shared_ptr<ParticipantDevice>
-ServerChatRoom::findCachedParticipantDevice(const shared_ptr<const CallSession> &session) const {
-
-	for (const auto &participant : mCachedParticipants) {
-		for (const auto &device : participant->getDevices()) {
-			if (device->getSession() == session) return device;
-		}
-	}
-
-	return nullptr;
 }
 
 void ServerChatRoom::queueMessage(const shared_ptr<ServerChatRoom::Message> &msg) {
@@ -445,10 +380,12 @@ void ServerChatRoom::sendMessage(BCTBX_UNUSED(const shared_ptr<ServerChatRoom::M
 
 bool ServerChatRoom::dispatchMessagesAfterFullState(BCTBX_UNUSED(const shared_ptr<CallSession> &session)) const {
 #ifdef HAVE_ADVANCED_IM
-	auto device = findCachedParticipantDevice(session);
+	const auto &conference = getConference();
+	auto device = conference->findInvitedParticipantDevice(session);
 	if (!device) {
-		lWarning() << "Conference " << *getConference()->getConferenceAddress()
-		           << " dispatchMessagesAfterFullState on unknown device.";
+		lWarning() << *conference << ": unable to dispatch messages to a device attached to " << *session
+		           << " (local address " << *session->getLocalAddress() << " remote address "
+		           << *session->getRemoteAddress() << ")";
 		return false; // Assume it is a recent device.
 	}
 	return dispatchMessagesAfterFullState(device);
@@ -562,7 +499,7 @@ void ServerChatRoom::setEphemeralLifetimeForDevice(long lifetime, const shared_p
 // -----------------------------------------------------------------------------
 
 ostream &operator<<(ostream &stream, const ServerChatRoom *chatRoom) {
-	// TODO: Is conference ID needed to be stored in both remote conference and chat room base classes?
+	// TODO: Is conference ID needed to be stored in both client conference and chat room base classes?
 	const auto peerAddress = chatRoom->getConferenceId().getPeerAddress();
 	return stream << "ServerChatRoom [" << (peerAddress ? peerAddress->toString() : std::string("unknown address"))
 	              << "]";

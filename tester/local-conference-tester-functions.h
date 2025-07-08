@@ -37,7 +37,6 @@
 #include "linphone/api/c-chat-room.h"
 #include "linphone/api/c-participant-device-identity.h"
 #include "linphone/core.h"
-#include "shared_tester_functions.h"
 
 using namespace LinphonePrivate;
 using namespace std;
@@ -46,104 +45,6 @@ using namespace ownership;
 
 namespace LinphoneTest {
 
-class BcAssert {
-public:
-	void addCustomIterate(const std::function<void()> &iterate) {
-		mIterateFuncs.push_back(iterate);
-	}
-	bool waitUntil(std::chrono::duration<double> timeout, const std::function<bool()> &condition) {
-		auto start = std::chrono::steady_clock::now();
-
-		bool_t result;
-		while (!(result = condition()) && (std::chrono::steady_clock::now() - start < timeout)) {
-			for (const std::function<void()> &iterate : mIterateFuncs) {
-				iterate();
-			}
-			ms_usleep(100);
-		}
-		return result;
-	}
-	bool wait(const std::function<bool()> &condition) {
-		return waitUntil(std::chrono::seconds(10), condition);
-	}
-
-private:
-	std::list<std::function<void()>> mIterateFuncs;
-};
-
-class CoreAssert : public BcAssert {
-public:
-	CoreAssert(std::initializer_list<std::shared_ptr<Core>> cores) {
-		for (shared_ptr<Core> core : cores) {
-			addCustomIterate([core] { linphone_core_iterate(L_GET_C_BACK_PTR(core)); });
-		}
-	}
-};
-
-class ClientConference;
-
-class ConfCoreManager : public CoreManager {
-public:
-	ConfCoreManager(std::string rc) : CoreManager(rc.c_str()) {
-		mMgr->user_info = this;
-	}
-
-	ConfCoreManager(std::string rc, const std::function<void()> &preStart)
-	    : CoreManager(owned(linphone_core_manager_create(rc.c_str()))), mPreStart(preStart) {
-		mMgr->user_info = this;
-		mPreStart();
-		start(true);
-	}
-
-	void reStart(bool check_for_proxies = true) {
-		linphone_core_manager_reinit(mMgr.get());
-		mPreStart();
-		start(check_for_proxies);
-	}
-
-	void configureCoreForConference(const Address &factoryUri) {
-		_configure_core_for_conference(mMgr.get(), factoryUri.toC());
-	}
-	void setupMgrForConference(const char *conferenceVersion = nullptr) {
-		setup_mgr_for_conference(mMgr.get(), conferenceVersion);
-	}
-	BorrowedMut<LinphoneChatRoom> searchChatRoom(const LinphoneAddress *localAddr,
-	                                             const LinphoneAddress *remoteAddr,
-	                                             const bctbx_list_t *participants = nullptr,
-	                                             const LinphoneChatRoomParams *params = nullptr) {
-		return borrowed_mut(linphone_core_search_chat_room(mMgr->lc, params, localAddr, remoteAddr, participants));
-	}
-	LinphoneAccount *getDefaultAccount() const {
-		return linphone_core_get_default_account(mMgr->lc);
-	}
-	stats &getStats() const {
-		return mMgr->stat;
-	}
-	LinphoneCoreManager *getCMgr() {
-		return mMgr.get();
-	};
-	LinphoneCore *getLc() const {
-		return mMgr->lc;
-	};
-
-private:
-	const std::function<void()> mPreStart = [] { return; };
-};
-
-class CoreManagerAssert : public BcAssert {
-public:
-	CoreManagerAssert(std::initializer_list<std::reference_wrapper<CoreManager>> coreMgrs) : BcAssert() {
-		for (CoreManager &coreMgr : coreMgrs) {
-			addCustomIterate([&coreMgr] { coreMgr.iterate(); });
-		}
-	}
-
-	CoreManagerAssert(std::list<std::reference_wrapper<CoreManager>> coreMgrs) : BcAssert() {
-		for (CoreManager &coreMgr : coreMgrs) {
-			addCustomIterate([&coreMgr] { coreMgr.iterate(); });
-		}
-	}
-};
 class Focus;
 
 /*Core manager acting as a client*/
@@ -151,9 +52,11 @@ class ClientConference : public ConfCoreManager {
 public:
 	ClientConference(std::string rc, Address factoryUri, bool encrypted = false)
 	    : ConfCoreManager(rc,
-	                      [this, factoryUri, encrypted] {
+	                      [this, factoryUri, encrypted](bool) {
 		                      configureCoreForConference(factoryUri);
 		                      _configure_core_for_audio_video_conference(mMgr.get(), factoryUri.toC());
+		                      linphone_core_enable_gruu_in_conference_address(getLc(), FALSE);
+		                      linphone_core_set_add_admin_information_to_contact(getLc(), FALSE);
 		                      setupMgrForConference();
 		                      LinphoneCoreCbs *cbs = linphone_factory_create_core_cbs(linphone_factory_get());
 		                      linphone_core_cbs_set_chat_room_state_changed(cbs, core_chat_room_state_changed);
@@ -163,7 +66,7 @@ public:
 		                      linphone_core_add_callbacks(getLc(), cbs);
 		                      linphone_core_cbs_unref(cbs);
 		                      if (encrypted) {
-			                      set_lime_server_and_curve(25519, mMgr.get());
+			                      set_lime_server_and_curve(C25519, mMgr.get());
 		                      }
 	                      }),
 	      mFocus(nullptr) {
@@ -180,22 +83,6 @@ public:
 		for (auto chatRoom : getCore().getChatRooms()) {
 			deleteChatRoomSync(*chatRoom);
 		}
-	}
-
-	static LinphoneChatMessage *sendTextMsg(LinphoneChatRoom *cr, const std::string text) {
-		LinphoneChatMessage *msg = nullptr;
-		if (cr && !text.empty()) {
-			lInfo() << " Chat room " << AbstractChatRoom::toCpp(cr)->getConferenceId()
-			        << " is sending message with text " << text;
-			msg = linphone_chat_room_create_message_from_utf8(cr, text.c_str());
-			BC_ASSERT_PTR_NOT_NULL(msg);
-			LinphoneChatMessageCbs *cbs = linphone_factory_create_chat_message_cbs(linphone_factory_get());
-			linphone_chat_message_cbs_set_msg_state_changed(cbs, liblinphone_tester_chat_message_msg_state_changed);
-			linphone_chat_message_add_callbacks(msg, cbs);
-			linphone_chat_message_cbs_unref(cbs);
-			linphone_chat_message_send(msg);
-		}
-		return msg;
 	}
 
 	static void deleteAllDevices(std::shared_ptr<Participant> &participant) {
@@ -244,7 +131,14 @@ private:
 /* Core manager acting as a focus*/
 class Focus : public ConfCoreManager {
 public:
-	Focus(std::string rc) : ConfCoreManager(rc, [this] { linphone_core_enable_conference_server(getLc(), TRUE); }) {
+	Focus(std::string rc)
+	    : ConfCoreManager(rc, [this](bool) {
+		      linphone_core_enable_gruu_in_conference_address(getLc(), FALSE);
+		      linphone_core_enable_conference_server(getLc(), TRUE);
+		      linphone_core_set_conference_availability_before_start(getLc(), 0);
+		      linphone_core_set_conference_expire_period(getLc(), 0);
+	      }) {
+
 		configureFocus();
 	}
 	~Focus() {
@@ -295,20 +189,6 @@ public:
 	}
 
 private:
-	/*
-	    static void server_core_chat_room_conference_address_generation(LinphoneChatRoom *cr) {
-	        Focus *focus =
-	            (Focus *)(((LinphoneCoreManager
-	   *)linphone_core_get_user_data(linphone_chat_room_get_core(cr)))->user_info); char config_id[6];
-	        belle_sip_random_token(config_id, sizeof(config_id));
-	        LinphoneAddress *conference_address =
-	            linphone_address_clone(linphone_account_get_contact_address(focus->getDefaultAccount()));
-	        linphone_address_set_uri_param(conference_address, "conf-id", config_id);
-	        linphone_chat_room_set_conference_address(cr, conference_address);
-	        linphone_address_unref(conference_address);
-	    }
-	*/
-
 	static void
 	server_core_chat_room_state_changed(LinphoneCore *core, LinphoneChatRoom *cr, LinphoneChatRoomState state) {
 		Focus *focus = (Focus *)(((LinphoneCoreManager *)linphone_core_get_user_data(core))->user_info);
@@ -317,8 +197,6 @@ private:
 				LinphoneChatRoomCbs *cbs = linphone_factory_create_chat_room_cbs(linphone_factory_get());
 				linphone_chat_room_cbs_set_participant_registration_subscription_requested(
 				    cbs, chat_room_participant_registration_subscription_requested);
-				//				linphone_chat_room_cbs_set_conference_address_generation(
-				//				    cbs, server_core_chat_room_conference_address_generation);
 				setup_chat_room_callbacks(cbs);
 				linphone_chat_room_add_callbacks(cr, cbs);
 				linphone_chat_room_cbs_set_user_data(cbs, focus);
@@ -375,15 +253,18 @@ private:
 		linphone_core_enable_rtp_bundle(getLc(), TRUE);
 		linphone_core_set_conference_cleanup_period(getLc(), 1);
 
-		LinphoneAccount *account = linphone_core_get_default_account(getLc());
-		const LinphoneAccountParams *account_params = linphone_account_get_params(account);
-		LinphoneAccountParams *new_account_params = linphone_account_params_clone(account_params);
-		linphone_account_params_enable_rtp_bundle(new_account_params, TRUE);
-		Address factoryAddress = getIdentity();
-		linphone_account_params_set_conference_factory_address(new_account_params, factoryAddress.toC());
-		linphone_account_set_params(account, new_account_params);
-		linphone_account_params_unref(new_account_params);
-		BC_ASSERT_TRUE(linphone_account_params_rtp_bundle_enabled(linphone_account_get_params(account)));
+		const bctbx_list_t *accounts = linphone_core_get_account_list(getLc());
+		for (const bctbx_list_t *account_it = accounts; account_it != NULL; account_it = account_it->next) {
+			LinphoneAccount *account = (LinphoneAccount *)(bctbx_list_get_data(account_it));
+			const LinphoneAccountParams *account_params = linphone_account_get_params(account);
+			LinphoneAccountParams *new_account_params = linphone_account_params_clone(account_params);
+			linphone_account_params_enable_rtp_bundle(new_account_params, TRUE);
+			linphone_account_params_set_conference_factory_address(
+			    new_account_params, linphone_account_params_get_identity_address(account_params));
+			linphone_account_set_params(account, new_account_params);
+			linphone_account_params_unref(new_account_params);
+			BC_ASSERT_TRUE(linphone_account_params_rtp_bundle_enabled(linphone_account_get_params(account)));
+		}
 
 		linphone_core_cbs_set_subscription_state_changed(cbs, linphone_subscription_state_change);
 		linphone_core_cbs_set_chat_room_state_changed(cbs, server_core_chat_room_state_changed);
@@ -419,6 +300,10 @@ void sendEphemeralMessageInAdminMode(Focus &focus,
                                      const std::string basicText,
                                      const int noMsg);
 
+bool checkChatroomCreation(const ConfCoreManager &core,
+                           const int nbChatRooms,
+                           const int participantNumber = -1,
+                           const std::string subject = "");
 bool checkChatroom(Focus &focus, const ConfCoreManager &core, const time_t baseJoiningTime);
 
 // Conference
@@ -429,6 +314,10 @@ void create_simple_conference_merging_calls_base(bool_t enable_ice,
                                                  bool_t change_layout,
                                                  LinphoneConferenceSecurityLevel security_level,
                                                  bool_t enable_screen_sharing);
+
+void conference_joined_multiple_times_base(LinphoneConferenceSecurityLevel security_level,
+                                           bool_t enable_chat,
+                                           long cleanup_window);
 
 void create_conference_base(time_t start_time,
                             int duration,
@@ -449,7 +338,9 @@ void create_conference_base(time_t start_time,
                             LinphoneConferenceSecurityLevel security_level,
                             std::list<LinphoneParticipantRole> allowedRoles,
                             bool_t add_participant_after_end,
-                            bool_t version_mismatch);
+                            bool_t version_mismatch,
+                            bool_t slow_ice_negotiation,
+                            bool_t enable_chat);
 
 void create_conference_with_screen_sharing_base(time_t start_time,
                                                 int duration,
@@ -462,6 +353,41 @@ void create_conference_with_screen_sharing_base(time_t start_time,
                                                 LinphoneConferenceSecurityLevel security_level,
                                                 std::list<LinphoneParticipantRole> allowedRoles);
 
+void create_conference_with_screen_sharing_chat_base(time_t start_time,
+                                                     int duration,
+                                                     LinphoneConferenceSecurityLevel security_level,
+                                                     LinphoneConferenceLayout layout,
+                                                     bool_t rejoin_with_screen_sharing);
+
+void create_conference_with_chat_base(LinphoneConferenceSecurityLevel security_level,
+                                      bool_t server_restart,
+                                      bool_t client_restart,
+                                      bool_t join_after_termination,
+                                      long cleanup_window,
+                                      bool_t slow_ice_negotiation,
+                                      bool_t client_reenter_conference,
+                                      bool_t network_drops,
+                                      time_t start_time,
+                                      bool_t enable_gruu_in_conference_address);
+
+void configure_end_to_end_encrypted_conference_server(Focus &focus);
+
+bool verify_participant_addition_stats(bctbx_list_t *coresList,
+                                       const ClientConference &participant,
+                                       stats participantStat,
+                                       int nbParticipantsAdded,
+                                       int nbNotifyEktReceived);
+
+bool verify_participant_removal_stats(bctbx_list_t *coresList,
+                                      const ClientConference &participant,
+                                      stats participantStat,
+                                      int nbParticipantsAdded,
+                                      int nbNotifyEktReceived);
+
+void does_all_participants_have_matching_ekt(LinphoneCoreManager *focus,
+                                             std::map<LinphoneCoreManager *, LinphoneParticipantInfo *> members,
+                                             const LinphoneAddress *confAddr);
+
 void wait_for_conference_streams(std::initializer_list<std::reference_wrapper<CoreManager>> coreMgrs,
                                  std::list<LinphoneCoreManager *> conferenceMgrs,
                                  LinphoneCoreManager *focus,
@@ -469,7 +395,11 @@ void wait_for_conference_streams(std::initializer_list<std::reference_wrapper<Co
                                  const LinphoneAddress *confAddr,
                                  bool_t enable_video);
 
-void two_overlapping_conferences_base(bool_t same_organizer, bool_t dialout);
+void check_muted(std::initializer_list<std::reference_wrapper<CoreManager>> coreMgrs,
+                 const LinphoneParticipantDevice *d,
+                 std::list<LinphoneCoreManager *> mutedMgrs);
+
+void two_overlapping_conferences_base(bool_t same_organizer, bool_t is_dialout);
 
 void create_conference_with_late_participant_addition_base(time_t start_time,
                                                            int duration,
@@ -483,7 +413,14 @@ void create_one_participant_conference_toggle_video_base(LinphoneConferenceLayou
                                                          bool_t enable_ice,
                                                          bool_t enable_stun);
 
-void create_conference_with_active_call_base(bool_t dialout);
+void create_conference_with_active_call_base(bool_t is_dialout);
+
+void check_conference_me(LinphoneConference *conference, bool_t is_me);
+void check_delete_focus_conference_info(std::initializer_list<std::reference_wrapper<CoreManager>> coreMgrs,
+                                        std::list<LinphoneCoreManager *> conferenceMgrs,
+                                        LinphoneCoreManager *focus,
+                                        LinphoneAddress *confAddr,
+                                        time_t end_time);
 
 LinphoneAddress *
 create_conference_on_server(Focus &focus,
@@ -496,7 +433,8 @@ create_conference_on_server(Focus &focus,
                             bool_t send_ics,
                             LinphoneConferenceSecurityLevel security_level,
                             bool_t enable_video,
-                            bool_t enable_chat);
+                            bool_t enable_chat,
+                            LinphoneConferenceParams *ics_chat_room_params);
 
 void set_video_settings_in_conference(LinphoneCoreManager *focus,
                                       LinphoneCoreManager *participant,
@@ -510,10 +448,10 @@ void set_video_settings_in_conference(LinphoneCoreManager *focus,
 size_t compute_no_video_streams(bool_t enable_video, LinphoneCall *call, LinphoneConference *conference);
 
 std::map<LinphoneCoreManager *, LinphoneParticipantInfo *>
-fill_memmber_list(std::list<LinphoneCoreManager *> members,
-                  std::map<LinphoneCoreManager *, LinphoneParticipantInfo *> participantList,
-                  LinphoneCoreManager *organizer,
-                  bctbx_list_t *participants_info);
+fill_member_list(std::list<LinphoneCoreManager *> members,
+                 std::map<LinphoneCoreManager *, LinphoneParticipantInfo *> participantList,
+                 LinphoneCoreManager *organizer,
+                 bctbx_list_t *participants_info);
 
 size_t compute_no_audio_streams(LinphoneCall *call, LinphoneConference *conference);
 
@@ -522,8 +460,7 @@ void update_sequence_number(bctbx_list_t **participants_info,
                             int exp_sequence,
                             int exp_new_participant_sequence);
 
-void create_conference_dial_out_base(bool_t send_ics,
-                                     LinphoneConferenceLayout layout,
+void create_conference_dial_out_base(LinphoneConferenceLayout layout,
                                      LinphoneVideoActivationPolicy *pol,
                                      bool_t enable_stun,
                                      bool_t enable_ice,
@@ -531,7 +468,8 @@ void create_conference_dial_out_base(bool_t send_ics,
                                      bool_t accept,
                                      bool_t participant_codec_mismatch,
                                      LinphoneConferenceSecurityLevel security_level,
-                                     bool_t version_mismatch);
+                                     bool_t version_mismatch,
+                                     bool_t enable_chat);
 
 void create_conference_with_audio_only_participants_base(LinphoneConferenceSecurityLevel security_level);
 

@@ -103,7 +103,9 @@ public class DeviceUtils {
 	}
 
 	public static void vibrate(Vibrator vibrator) {
-		if (Version.sdkAboveOrEqual(Version.API26_O_80)) {
+		if (Version.sdkAboveOrEqual(Version.API33_ANDROID_13_TIRAMISU)) {
+			DeviceUtils33.vibrate(vibrator);
+		} else if (Version.sdkAboveOrEqual(Version.API26_O_80)) {
 			DeviceUtils26.vibrate(vibrator);
 		} else {
 			DeviceUtils23.vibrate(vibrator);
@@ -130,6 +132,64 @@ public class DeviceUtils {
 		} else {
 			DeviceUtils23.playRingtone(ringtone, audioAttrs);
 		}
+	}
+
+	public static boolean checkIfDoNotDisturbAllowsAllCalls(Context context) {
+		try {
+			NotificationManager notificationManager = (NotificationManager) context.getSystemService(Context.NOTIFICATION_SERVICE);
+			NotificationManager.Policy policy = notificationManager.getNotificationPolicy();
+			boolean senderCheck = policy.priorityCallSenders == NotificationManager.Policy.PRIORITY_SENDERS_ANY;
+			boolean categoryCheck = policy.priorityCategories == NotificationManager.Policy.PRIORITY_CATEGORY_CALLS;
+			Log.i("[Device Utils] Call sender check is [" + senderCheck + "], call caterogy check is [" + categoryCheck + "]");
+			return senderCheck || categoryCheck;
+		} catch (SecurityException se) {
+			Log.e("[Device Utils] Can't check notification policy: " + se);
+		}
+		return false;
+	}
+
+	public static boolean checkIfDoNotDisturbAllowsKnownContacts(Context context) {
+		try {
+			NotificationManager notificationManager = (NotificationManager) context.getSystemService(Context.NOTIFICATION_SERVICE);
+			NotificationManager.Policy policy = notificationManager.getNotificationPolicy();
+			return policy.priorityCallSenders == NotificationManager.Policy.PRIORITY_SENDERS_CONTACTS;
+		} catch (SecurityException se) {
+			Log.e("[Device Utils] Can't check notification policy: " + se);
+		}
+		return false;
+	}
+
+	public static boolean checkIfIsKnownContact(Context context, Address caller) {
+		if (caller == null) {
+			return false;
+		}
+
+		if (context.checkSelfPermission(android.Manifest.permission.READ_CONTACTS) != PackageManager.PERMISSION_GRANTED) {
+			Log.e("[Device Utils] Can't check for favorite contact, permission hasn't been granted yet");
+			return false;
+		}
+		
+		String number = caller.getUsername();
+		String address = caller.asStringUriOnly();
+		try {
+			Cursor cursor = context.getContentResolver().query(
+				ContactsContract.Data.CONTENT_URI,
+				new String[] { },
+				ContactsContract.CommonDataKinds.Phone.NORMALIZED_NUMBER + " LIKE ? OR " + ContactsContract.CommonDataKinds.SipAddress.SIP_ADDRESS + " LIKE ?",
+				new String[] { number, address },
+				null
+			);
+
+			if (cursor != null) {
+				Log.i("[Device Utils] Cursor isn't null, at least one contact in native addressbook matches");
+				cursor.close();
+				return true;
+			}
+		} catch (IllegalArgumentException e) {
+			Log.e("[Device Utils] Failed to check if username / SIP address is part of a favorite contact: ", e);
+		}
+		
+		return false;
 	}
 
 	public static boolean checkIfDoNotDisturbAllowsExceptionForFavoriteContacts(Context context) {
@@ -192,7 +252,9 @@ public class DeviceUtils {
 	}
 
 	public static void startForegroundService(Context context, Intent intent) {
-		if (Version.sdkAboveOrEqual(Version.API31_ANDROID_12)) {
+		if (Version.sdkAboveOrEqual(Version.API33_ANDROID_13_TIRAMISU)) {
+			DeviceUtils33.startForegroundService(context, intent);
+		} else if (Version.sdkAboveOrEqual(Version.API31_ANDROID_12)) {
 			DeviceUtils31.startForegroundService(context, intent);
 		} else if (Version.sdkAboveOrEqual(Version.API26_O_80)) {
 			DeviceUtils26.startForegroundService(context, intent);

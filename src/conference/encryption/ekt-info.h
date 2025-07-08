@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010-2023 Belledonne Communications SARL.
+ * Copyright (c) 2010-2024 Belledonne Communications SARL.
  *
  * This file is part of Liblinphone
  * (see https://gitlab.linphone.org/BC/public/liblinphone).
@@ -24,7 +24,7 @@
 #include <map>
 #include <vector>
 
-#include <belle-sip/object++.hh>
+#include "belle-sip/object++.hh"
 
 #include "address/address.h"
 #include "dictionary/dictionary.h"

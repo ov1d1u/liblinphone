@@ -35,6 +35,7 @@
 #include "call/call.h"
 #include "chat/chat-message/chat-message-p.h"
 #include "chat/chat-room/chat-room.h"
+#include "conference/conference-id-params.h"
 #include "conference/conference.h"
 #include "conference/server-conference.h"
 #include "linphone/api/c-account-params.h"
@@ -128,52 +129,79 @@ static void call_received(SalCallOp *h) {
 	/* Look if this INVITE is for a call that has already been notified but broken because of network failure */
 	if (L_GET_PRIVATE_FROM_C_OBJECT(lc)->inviteReplacesABrokenCall(h)) return;
 
+	auto recvCustomHeaders = h->getRecvCustomHeaders();
 	std::shared_ptr<Address> from;
-	const char *pAssertedId = sal_custom_header_find(h->getRecvCustomHeaders(), "P-Asserted-Identity");
+	const char *pAssertedId = sal_custom_header_find(recvCustomHeaders, "P-Asserted-Identity");
 	/* In some situation, better to trust the network rather than the UAC */
 	if (linphone_config_get_int(linphone_core_get_config(lc), "sip", "call_logs_use_asserted_id_instead_of_from", 0)) {
 		if (pAssertedId) {
 			LinphoneAddress *pAssertedIdAddr = linphone_address_new(pAssertedId);
 			if (pAssertedIdAddr) {
-				ms_message("Using P-Asserted-Identity [%s] instead of from [%s] for op [%p]", pAssertedId,
-				           h->getFrom().c_str(), h);
+				lInfo() << "Using P-Asserted-Identity [" << pAssertedId << "] instead of from [" << h->getFrom()
+				        << "] for op [" << h << "]";
 				from = Address::toCpp(pAssertedIdAddr)->toSharedPtr();
 			} else {
-				ms_warning("Unsupported P-Asserted-Identity header for op [%p] ", h);
+				lWarning() << "Unsupported P-Asserted-Identity header for op [" << h << "]";
 			}
 
 		} else {
-			ms_warning("No P-Asserted-Identity header found so cannot use it for op [%p] instead of from", h);
+			lWarning() << "No P-Asserted-Identity header found so cannot use it for op [" << h << "] instead of from";
 		}
 	}
 
 	if (!from) from = Address::create(h->getFrom());
 	std::shared_ptr<Address> to = Address::create(h->getTo());
-
+	const SalAddress *remoteContactAddress = h->getRemoteContactAddress();
 	std::shared_ptr<LinphonePrivate::Core> core = lc ? L_GET_CPP_PTR_FROM_C_OBJECT(lc) : nullptr;
+	bool chatCapabilities = false;
+	const auto &remoteMd = h->getRemoteMediaDescription();
+	const auto hasStreams = remoteMd ? (remoteMd->streams.size() > 0) : false;
+	const auto isServer = !!linphone_core_conference_server_enabled(lc);
 
-	if (sal_address_has_param(h->getRemoteContactAddress(), "text")) {
 #ifdef HAVE_ADVANCED_IM
-		string endToEndEncrypted =
-		    L_C_TO_STRING(sal_custom_header_find(h->getRecvCustomHeaders(), "End-To-End-Encrypted"));
-		bool encrypted = endToEndEncrypted == "true";
-		string ephemerable = L_C_TO_STRING(sal_custom_header_find(h->getRecvCustomHeaders(), "Ephemerable"));
-		string ephemeralLifeTime =
-		    L_C_TO_STRING(sal_custom_header_find(h->getRecvCustomHeaders(), "Ephemeral-Life-Time"));
-		auto ephemeralMode = ((ephemerable == "true") && (!ephemeralLifeTime.empty()))
-		                         ? AbstractChatRoom::EphemeralMode::AdminManaged
-		                         : AbstractChatRoom::EphemeralMode::DeviceManaged;
-		long parsedEphemeralLifeTime = linphone_core_get_default_ephemeral_lifetime(lc);
-		if (ephemeralMode == AbstractChatRoom::EphemeralMode::AdminManaged) {
-			parsedEphemeralLifeTime = stol(ephemeralLifeTime, nullptr);
-		}
-		string oneToOneChatRoom =
-		    L_C_TO_STRING(sal_custom_header_find(h->getRecvCustomHeaders(), "One-To-One-Chat-Room"));
-		bool isOneToOne = (oneToOneChatRoom == "true");
+	// Chat settings
+	string endToEndEncrypted = L_C_TO_STRING(sal_custom_header_find(recvCustomHeaders, "End-To-End-Encrypted"));
+	bool encrypted = endToEndEncrypted == "true";
+	string ephemerable = L_C_TO_STRING(sal_custom_header_find(recvCustomHeaders, "Ephemerable"));
+	string ephemeralLifeTime = L_C_TO_STRING(sal_custom_header_find(recvCustomHeaders, "Ephemeral-Life-Time"));
+	auto ephemeralMode = ((ephemerable == "true") && (!ephemeralLifeTime.empty()))
+	                         ? AbstractChatRoom::EphemeralMode::AdminManaged
+	                         : AbstractChatRoom::EphemeralMode::DeviceManaged;
+	long parsedEphemeralLifeTime = linphone_core_get_default_ephemeral_lifetime(lc);
+	if (ephemeralMode == AbstractChatRoom::EphemeralMode::AdminManaged) {
+		parsedEphemeralLifeTime = stol(ephemeralLifeTime, nullptr);
+	}
+	string oneToOneChatRoom = L_C_TO_STRING(sal_custom_header_find(recvCustomHeaders, "One-To-One-Chat-Room"));
+	bool isOneToOne = (oneToOneChatRoom == "true");
+	// Chat capabilities are enabled if the text parameter is in the contact address or at least one chat configuration
+	// parameter is listed in the custom headers
+	chatCapabilities = !ephemerable.empty() || !ephemeralLifeTime.empty() || !endToEndEncrypted.empty() ||
+	                   !oneToOneChatRoom.empty() ||
+	                   !!(sal_address_has_param(remoteContactAddress, Conference::TextParameter.c_str()));
+#endif
 
-		shared_ptr<ConferenceParams> params = ConferenceParams::create(L_GET_CPP_PTR_FROM_C_OBJECT(lc));
+	auto params = ConferenceParams::create(L_GET_CPP_PTR_FROM_C_OBJECT(lc));
+	// Search an account whose identity matches the to address.
+	// For clients, it means associating an account to a chatroom or conference
+	// For servers, it is looking an account whose identity is the conference focus
+	LinphoneAccount *account = linphone_core_lookup_account_by_identity(lc, to->toC());
+	// If the core is used as conference server, search for an account that matches the to address as the client will
+	// call the conference factory to create one
+	LinphoneAccount *conferenceAccount =
+	    isServer ? linphone_core_lookup_account_by_conference_factory_strict(lc, to->toC()) : NULL;
+	if (!account && isServer) {
+		account = conferenceAccount;
+	}
+	if (account) {
+		params->setAccount(Account::toCpp(account)->getSharedFromThis());
+	}
+	params->setUtf8Subject(h->getSubject());
+	if (hasStreams) {
+		params->setAudioVideoDefaults();
+	}
+	if (chatCapabilities) {
+#ifdef HAVE_ADVANCED_IM
 		params->setChatDefaults();
-		params->setUtf8Subject(h->getSubject());
 		params->setSecurityLevel(encrypted ? ConferenceParams::SecurityLevel::EndToEnd
 		                                   : ConferenceParams::SecurityLevel::None);
 		params->setGroup(!isOneToOne);
@@ -182,110 +210,74 @@ static void call_received(SalCallOp *h) {
 		                                         (parsedEphemeralLifeTime > 0));
 		params->getChatParams()->setBackend(ChatParams::Backend::FlexisipChat);
 		params->getChatParams()->setEphemeralLifetime(parsedEphemeralLifeTime);
-
-		if (linphone_core_conference_server_enabled(lc)) {
-			shared_ptr<Conference> conference = core->findConference(ConferenceId(to, to));
-			if (conference) {
-				static_pointer_cast<ServerConference>(conference)->confirmJoining(h);
-			} else if (_linphone_core_is_conference_creation(lc, to->toC())) {
-				if (isOneToOne) {
-					bool_t oneToOneChatRoomEnabled = linphone_config_get_bool(linphone_core_get_config(lc), "misc",
-					                                                          "enable_one_to_one_chat_room", TRUE);
-					if (!oneToOneChatRoomEnabled) {
-						h->decline(SalReasonNotAcceptable);
-						h->release();
-						return;
-					}
-					std::shared_ptr<Address> fromOp = Address::create(h->getFrom());
-					const auto participantList =
-					    Utils::parseResourceLists(h->getContentInRemote(ContentType::ResourceLists));
-					if (participantList.size() != 1) {
-						lInfo() << *fromOp << " is trying to create a one-to-one chatroom with "
-						        << participantList.size() << " participants on server " << *to;
-						SalErrorInfo sei;
-						memset(&sei, 0, sizeof(sei));
-						sal_error_info_set(&sei, SalReasonNotAcceptable, "SIP", 0,
-						                   "Trying to create a one-to-one chatroom with more than one participant",
-						                   nullptr);
-						h->declineWithErrorInfo(&sei, nullptr);
-						sal_error_info_reset(&sei);
-						h->release();
-						return;
-					}
-					const auto &participant = (*participantList.begin())->getAddress();
-					std::shared_ptr<Address> confAddr =
-					    L_GET_PRIVATE_FROM_C_OBJECT(lc)->mainDb->findOneToOneConferenceChatRoomAddress(
-					        fromOp, participant, encrypted);
-					if (confAddr && confAddr->isValid()) {
-						shared_ptr<AbstractChatRoom> chatRoom = core->findChatRoom(ConferenceId(confAddr, confAddr));
-						static_pointer_cast<ServerChatRoom>(chatRoom)->confirmRecreation(h);
-						return;
-					}
-				}
-				auto chatRoom = L_GET_PRIVATE_FROM_C_OBJECT(lc)->createServerChatRoom(to, h, params);
-				static_pointer_cast<ServerChatRoom>(chatRoom)->confirmCreation();
-				return;
-			} else {
-				// invite is for an unknown chatroom
-				h->decline(SalReasonNotFound);
-				h->release();
-			}
-		} else {
-			auto resourceListContent = h->getContentInRemote(ContentType::ResourceLists);
-			auto participantInfoList = Utils::parseResourceLists(resourceListContent);
-			if (isOneToOne) {
-				const auto toIt = std::find_if(participantInfoList.cbegin(), participantInfoList.cend(),
-				                               [&to](const auto &info) { return to->weakEqual(*info->getAddress()); });
-				if (toIt != participantInfoList.cend()) {
-					participantInfoList.erase(toIt);
-				}
-				if (participantInfoList.size() == 1) {
-					const auto &participant = (*participantInfoList.begin())->getAddress();
-					shared_ptr<AbstractChatRoom> chatRoom =
-					    L_GET_PRIVATE_FROM_C_OBJECT(lc)->findExhumableOneToOneChatRoom(to, participant,
-					                                                                   endToEndEncrypted == "true");
-					if (chatRoom) {
-						lInfo() << "Found exhumable chat room [" << chatRoom->getConferenceId() << "]";
-						static_pointer_cast<ClientChatRoom>(chatRoom)->onRemotelyExhumedConference(h);
-						// For tests purposes
-						linphone_core_notify_chat_room_exhumed(lc, chatRoom->toC());
-						return;
-					}
-				}
-			}
-			auto remoteContact = Address::create(h->getRemoteContact());
-			shared_ptr<AbstractChatRoom> chatRoom = core->findChatRoom(ConferenceId(remoteContact, to));
-			if (chatRoom && chatRoom->getCapabilities() & ChatRoom::Capabilities::Basic) {
-				lError() << "Invalid basic chat room found. It should have been a ClientChatRoom... Recreating it...";
-				chatRoom->deleteFromDb();
-				chatRoom.reset();
-			}
-			if (!chatRoom) {
-				const auto localAddressWithoutGruu = Address::create(to->getUriWithoutGruu());
-				const auto peerAddressWithoutGruu = Address::create(remoteContact->getUriWithoutGruu());
-				chatRoom = L_GET_PRIVATE_FROM_C_OBJECT(lc)->createClientChatRoom(
-				    to, ConferenceId(peerAddressWithoutGruu, localAddressWithoutGruu), h, params);
-			}
-
-			shared_ptr<Conference> conference = chatRoom->getConference();
-			if (oneToOneChatRoom == "true") {
-				chatRoom->addCapability(ClientChatRoom::Capabilities::OneToOne);
-			}
-			static_pointer_cast<ClientConference>(conference)->confirmJoining(h);
-		}
-		return;
 #else
-		ms_warning("Advanced IM such as group chat is disabled!");
-		return;
+		lWarning() << "Unable to add chat capabilities to parameters [" << params
+		           << "] because advanced IM such as group chat is disabled!";
 #endif
-	} else if ((sal_address_has_uri_param(h->getToAddress(), "conf-id")) ||
-	           ((sal_address_has_param(h->getRemoteContactAddress(), "admin") &&
-	             (strcmp(sal_address_get_param(h->getRemoteContactAddress(), "admin"), "1") == 0)))) {
-		// Create a conference if remote is trying to schedule one or it is calling a conference focus
-		if (linphone_core_conference_server_enabled(lc)) {
-			shared_ptr<Conference> conference = core->findConference(ConferenceId(to, to));
-			if (conference) {
-				const auto &remoteMd = h->getRemoteMediaDescription();
+	}
+
+	shared_ptr<Conference> conference;
+	if (chatCapabilities && !hasStreams && !isServer) {
+#ifdef HAVE_ADVANCED_IM
+		auto resourceListContent = h->getContentInRemote(ContentType::ResourceLists);
+		auto participantInfoList = Utils::parseResourceLists(resourceListContent);
+		if (isOneToOne) {
+			const auto toIt = std::find_if(participantInfoList.cbegin(), participantInfoList.cend(),
+			                               [&to](const auto &info) { return to->weakEqual(*info->getAddress()); });
+			if (toIt != participantInfoList.cend()) {
+				participantInfoList.erase(toIt);
+			}
+			if (participantInfoList.size() == 1) {
+				const auto &participant = (*participantInfoList.begin())->getAddress();
+				shared_ptr<AbstractChatRoom> chatRoom = L_GET_PRIVATE_FROM_C_OBJECT(lc)->findExhumableOneToOneChatRoom(
+				    to, participant, endToEndEncrypted == "true");
+				if (chatRoom) {
+					lInfo() << "Found exhumable chat room [" << chatRoom->getConferenceId() << "]";
+					static_pointer_cast<ClientChatRoom>(chatRoom)->onRemotelyExhumedConference(h);
+					// For tests purposes
+					linphone_core_notify_chat_room_exhumed(lc, chatRoom->toC());
+					return;
+				}
+			}
+		}
+		auto remoteContact = Address::create(h->getRemoteContact());
+		auto conferenceIdParams = core->createConferenceIdParams();
+		conferenceIdParams.setKeepGruu(false);
+		conferenceIdParams.enableExtractUri(true);
+		ConferenceId conferenceId(remoteContact, to, conferenceIdParams);
+		shared_ptr<AbstractChatRoom> chatRoom = core->findChatRoom(conferenceId, false);
+		if (chatRoom && chatRoom->getCapabilities() & ChatRoom::Capabilities::Basic) {
+			lError() << "Invalid basic chat room found. It should have been a ClientChatRoom... Recreating it...";
+			chatRoom->deleteFromDb();
+			chatRoom.reset();
+		}
+		if (!chatRoom) {
+			const auto localAddressWithoutGruu = Address::create(to->getUriWithoutGruu());
+			const auto peerAddressWithoutGruu = Address::create(remoteContact->getUriWithoutGruu());
+			chatRoom = L_GET_PRIVATE_FROM_C_OBJECT(lc)->createClientChatRoom(to, conferenceId, h, params);
+		}
+
+		conference = chatRoom->getConference();
+		if (oneToOneChatRoom == "true") {
+			chatRoom->addCapability(ClientChatRoom::Capabilities::OneToOne);
+		}
+		static_pointer_cast<ClientConference>(conference)->confirmJoining(h);
+#else
+		lWarning() << "Unable to create chat room because aAdvanced IM such as group chat is disabled!";
+		h->decline(SalReasonNotAcceptable);
+		h->release();
+#endif
+		return;
+	} else if (isServer && (chatCapabilities || to->hasUriParam(Conference::ConfIdParameter) || conferenceAccount)) {
+		// Check if an account can be associated to a conference or the conference has chat capabilities. In fact, the
+		// latter check is required to be backward compatible as older versions of the flexisip conference server did
+		// not create chatroom addresses from a single conference focus but using the following pattern
+		// sip:chatroom-<random_string>@domain.com
+		const auto conferenceIdParams = core->createConferenceIdParams();
+		conference = core->findConference(ConferenceId(to, to, conferenceIdParams), false);
+		if (conference) {
+			auto serverConference = dynamic_pointer_cast<ServerConference>(conference);
+			if (serverConference) {
 				if (remoteMd) {
 					const auto times = remoteMd->times;
 					time_t startTime = -1;
@@ -297,44 +289,138 @@ static void call_received(SalCallOp *h) {
 
 					if ((startTime != -1) || (endTime != -1)) {
 						// If start time or end time is not -1, then the client wants to update the conference
-						static_pointer_cast<ServerConference>(conference)->updateConferenceInformation(h);
+						if (!serverConference->updateConferenceInformation(h)) {
+							SalErrorInfo sei;
+							memset(&sei, 0, sizeof(sei));
+							const char *msg = "Conference information cannot be updated right now";
+							sal_error_info_set(&sei, SalReasonTemporarilyUnavailable, "SIP", 0, nullptr, msg);
+							h->replyWithErrorInfo(&sei);
+							sal_error_info_reset(&sei);
+							h->release();
+							return;
+						}
 					}
+				} else if (chatCapabilities) {
+#ifdef HAVE_ADVANCED_IM
+					serverConference->confirmJoining(h);
+#else
+					lWarning() << "Unable to join chat room [" << conference
+					           << "] because advanced IM such as group chat is disabled!";
+					h->decline(SalReasonNotAcceptable);
+					h->release();
+#endif
+					return;
 				}
 			} else {
-				auto params = ConferenceParams::create(L_GET_CPP_PTR_FROM_C_OBJECT(lc));
-				params->setAudioVideoDefaults();
-				params->setHidden(
-				    linphone_config_get_bool(linphone_core_get_config(lc), "misc", "hide_conferences", 0));
+				lError() << "Conference [" << conference << "] is not of type ServerConference - rejecting session";
+				h->decline(SalReasonNotAcceptable);
+				h->release();
+				return;
+			}
+		} else {
 #ifdef HAVE_DB_STORAGE
-				std::shared_ptr<ConferenceInfo> confInfo =
-				    L_GET_PRIVATE_FROM_C_OBJECT(lc)->mainDb->isInitialized()
-				        ? L_GET_PRIVATE_FROM_C_OBJECT(lc)->mainDb->getConferenceInfoFromURI(to)
-				        : nullptr;
-				if (confInfo) {
-					conference = (new ServerConference(core, to, nullptr, params))->toSharedPtr();
-					conference->init(h);
-				} else
+			std::shared_ptr<ConferenceInfo> confInfo =
+			    L_GET_PRIVATE_FROM_C_OBJECT(lc)->mainDb->isInitialized()
+			        ? L_GET_PRIVATE_FROM_C_OBJECT(lc)->mainDb->getConferenceInfoFromURI(to)
+			        : nullptr;
+			if (confInfo) {
+				params->enableAudio(confInfo->getCapability(LinphoneStreamTypeAudio));
+				params->enableVideo(confInfo->getCapability(LinphoneStreamTypeVideo));
+				params->enableChat(confInfo->getCapability(LinphoneStreamTypeText));
+				params->setSubject(confInfo->getSubject());
+				const auto startTime = confInfo->getDateTime();
+				params->setStartTime(startTime);
+				const auto duration = confInfo->getDuration();
+				if (duration > 0) {
+					// The duration is stored in minutes whereas the start time in seconds
+					params->setEndTime(startTime + duration * 60);
+				}
+				conference = (new ServerConference(core, nullptr, params))->toSharedPtr();
+				conference->init(h);
+			} else
 #endif // HAVE_DB_STORAGE
-				{
-					if (sal_address_has_uri_param(h->getToAddress(), "conf-id")) {
+			{
+				if (hasStreams) {
+					if (sal_address_has_uri_param(h->getToAddress(), Conference::ConfIdParameter.c_str())) {
+						long long expiredConferenceId =
+						    L_GET_PRIVATE_FROM_C_OBJECT(lc)->mainDb->isInitialized()
+						        ? L_GET_PRIVATE_FROM_C_OBJECT(lc)->mainDb->findExpiredConferenceId(to)
+						        : -1;
 						SalErrorInfo sei;
 						memset(&sei, 0, sizeof(sei));
-						sal_error_info_set(&sei, SalReasonNotFound, "SIP", 0, nullptr, nullptr);
-						h->declineWithErrorInfo(&sei);
-						LinphoneErrorInfo *ei = linphone_error_info_new();
-						linphone_error_info_set(ei, nullptr, LinphoneReasonNotFound, 404, "Conference not found",
-						                        nullptr);
-						core->reportEarlyCallFailed(LinphoneCallIncoming, from, to, ei, h->getCallId());
-						h->release();
+						std::string msg = "Conference " + to->toString();
+						SalReason reason = SalReasonNone;
+						if (expiredConferenceId == -1) {
+							msg += " has not been found";
+							reason = SalReasonNotFound;
+						} else {
+							msg += " has already expired";
+							reason = SalReasonGone;
+						}
+						sal_error_info_set(&sei, reason, "SIP", 0, nullptr, msg.c_str());
+						h->replyWithErrorInfo(&sei);
 						sal_error_info_reset(&sei);
-						linphone_error_info_unref(ei);
+						h->release();
 						return;
 					} else {
-						conference = (new ServerConference(core, to, nullptr, params))->toSharedPtr();
-						conference->init(h);
-						static_pointer_cast<ServerConference>(conference)->confirmCreation();
+						auto serverConference = (new ServerConference(core, nullptr, params))->toSharedPtr();
+						serverConference->init(h);
+						static_pointer_cast<ServerConference>(serverConference)->confirmCreation();
 						return;
 					}
+				} else {
+#ifdef HAVE_ADVANCED_IM
+					if (_linphone_core_is_conference_creation(lc, to->toC())) {
+						if (isOneToOne) {
+							bool_t oneToOneChatRoomEnabled = linphone_config_get_bool(
+							    linphone_core_get_config(lc), "misc", "enable_one_to_one_chat_room", TRUE);
+							if (!oneToOneChatRoomEnabled) {
+								h->decline(SalReasonNotAcceptable);
+								h->release();
+								return;
+							}
+							std::shared_ptr<Address> fromOp = Address::create(h->getFrom());
+							const auto participantList =
+							    Utils::parseResourceLists(h->getContentInRemote(ContentType::ResourceLists));
+							if (participantList.size() != 1) {
+								lInfo() << *fromOp << " is trying to create a one-to-one chatroom with "
+								        << participantList.size() << " participants on server " << *to;
+								SalErrorInfo sei;
+								memset(&sei, 0, sizeof(sei));
+								const char *msg =
+								    "Trying to create a one-to-one chatroom with more than one participant";
+								sal_error_info_set(&sei, SalReasonNotAcceptable, "SIP", 0, msg, msg);
+								h->replyWithErrorInfo(&sei, nullptr);
+								sal_error_info_reset(&sei);
+								h->release();
+								return;
+							}
+							const auto &participant = (*participantList.begin())->getAddress();
+							std::shared_ptr<Address> confAddr =
+							    L_GET_PRIVATE_FROM_C_OBJECT(lc)->mainDb->findOneToOneConferenceChatRoomAddress(
+							        fromOp, participant, encrypted);
+							if (confAddr && confAddr->isValid()) {
+								shared_ptr<AbstractChatRoom> chatRoom =
+								    core->findChatRoom(ConferenceId(confAddr, confAddr, conferenceIdParams));
+								static_pointer_cast<ServerChatRoom>(chatRoom)->confirmRecreation(h);
+								return;
+							}
+						}
+						auto chatRoom = L_GET_PRIVATE_FROM_C_OBJECT(lc)->createServerChatRoom(to, h, params);
+						if (chatRoom) {
+							static_pointer_cast<ServerChatRoom>(chatRoom)->confirmCreation();
+						}
+					} else {
+						// invite is for an unknown chatroom
+						h->decline(SalReasonNotFound);
+						h->release();
+					}
+#else
+					lWarning() << "Unable to create chat room because advanced IM such as group chat is disabled!";
+					h->decline(SalReasonNotAcceptable);
+					h->release();
+#endif
+					return;
 				}
 			}
 		}
@@ -353,7 +439,7 @@ static void call_received(SalCallOp *h) {
 					memset(&sei, 0, sizeof(sei));
 					sal_error_info_set(&sei, SalReasonRedirect, "SIP", 0, nullptr, nullptr);
 					SalAddress *altAddr = sal_address_new(altContact);
-					h->declineWithErrorInfo(&sei, altAddr);
+					h->replyWithErrorInfo(&sei, altAddr);
 					ms_free(altContact);
 					sal_address_unref(altAddr);
 					LinphoneErrorInfo *ei = linphone_error_info_new();
@@ -375,28 +461,29 @@ static void call_received(SalCallOp *h) {
 	if (!L_GET_PRIVATE_FROM_C_OBJECT(lc)->canWeAddCall()) { /* Busy */
 		h->decline(SalReasonBusy);
 		LinphoneErrorInfo *ei = linphone_error_info_new();
-		linphone_error_info_set(ei, nullptr, LinphoneReasonBusy, 486, "Busy - too many calls", nullptr);
+		linphone_error_info_set(ei, nullptr, LinphoneReasonBusy, 486, "Busy - too many calls", "Busy - too many calls");
 		core->reportEarlyCallFailed(LinphoneCallIncoming, from, to, ei, h->getCallId());
 		h->release();
 		linphone_error_info_unref(ei);
 		return;
 	}
 
-	if (linphone_config_get_int(linphone_core_get_config(lc), "sip", "reject_duplicated_calls", 1)) {
+	if (linphone_config_get_int(linphone_core_get_config(lc), "sip", "reject_duplicated_calls", 1) &&
+	    !sal_address_has_param(remoteContactAddress, Conference::IsFocusParameter.c_str())) {
 		/* Check if I'm the caller */
 		std::shared_ptr<Address> fromAddressToSearchIfMe = nullptr;
 		if (h->getPrivacy() == SalPrivacyNone) fromAddressToSearchIfMe = from->clone()->toSharedPtr();
 		else if (pAssertedId) fromAddressToSearchIfMe = Address::create(pAssertedId);
-		else ms_warning("Hidden from identity, don't know if it's me");
+		else lWarning() << "Hidden from identity, don't know if it's me";
 
 		if (fromAddressToSearchIfMe &&
 		    L_GET_PRIVATE_FROM_C_OBJECT(lc)->isAlreadyInCallWithAddress(fromAddressToSearchIfMe)) {
-			ms_warning(
-			    "Receiving a call while one with same address [%s] is initiated, refusing this one with busy message",
-			    from->toString().c_str());
+			lWarning() << "Receiving a call while one with same address [" << *from
+			           << "] is initiated, refusing this one with busy message";
 			h->decline(SalReasonBusy);
 			LinphoneErrorInfo *ei = linphone_error_info_new();
-			linphone_error_info_set(ei, nullptr, LinphoneReasonBusy, 486, "Busy - duplicated call", nullptr);
+			linphone_error_info_set(ei, nullptr, LinphoneReasonBusy, 486, "Busy - duplicated call",
+			                        "Busy - duplicated call");
 			core->reportEarlyCallFailed(LinphoneCallIncoming, from, to, ei, h->getCallId());
 			h->release();
 			linphone_error_info_unref(ei);
@@ -405,7 +492,12 @@ static void call_received(SalCallOp *h) {
 	}
 
 	auto call = call_get_or_create(lc, h, from, to);
-	if (call) call->startIncomingNotification();
+	if (call) {
+		if (conference) {
+			call->getActiveSession()->addListener(conference);
+		}
+		call->startIncomingNotification();
+	}
 }
 
 static void call_rejected(SalCallOp *h) {
@@ -543,7 +635,7 @@ static void auth_failure(SalOp *op, SalAuthInfo *info) {
 			 * authentication credential MUST be provided by the application before the connection without prompt from
 			 * the library */
 			ms_message("%s/%s/%s/%s authentication fails.", info->realm, info->username, info->domain,
-			           info->mode == SalAuthModeHttpDigest ? "HttpDigest" : "Tls");
+			           sal_auth_mode_to_string(info->mode));
 			if (info->mode == SalAuthModeHttpDigest) {
 				LinphoneAuthInfo *auth_info =
 				    linphone_core_create_auth_info(lc, info->username, NULL, NULL, NULL, info->realm, info->domain);
@@ -598,7 +690,11 @@ static void register_failure(SalOp *op) {
 		/* Do nothing. There will be an auth_requested() callback. If the callback doesn't provide an AuthInfo, then
 		 * the proxy config will transition to the failed state.*/
 	} else {
-		Account::toCpp(account)->setState(LinphoneRegistrationFailed, details);
+		if (Account::toCpp(account)->isUnregistering()) {
+			Account::toCpp(account)->setState(LinphoneRegistrationNone, details);
+		} else {
+			Account::toCpp(account)->setState(LinphoneRegistrationFailed, details);
+		}
 	}
 	if (Account::toCpp(account)->getPresencePublishEvent()) {
 		/*prevent publish to be sent now until registration gets successful*/
@@ -633,7 +729,10 @@ static void dtmf_received(SalOp *op, char dtmf) {
 	L_GET_PRIVATE(mediaSessionRef)->dtmfReceived(dtmf);
 }
 
-static void call_refer_received(SalOp *op, const SalAddress *referTo) {
+static void call_refer_received(SalOp *op,
+                                const SalAddress *referTo,
+                                const SalCustomHeader *custom_headers,
+                                const SalBodyHandler *body_handler) {
 	LinphonePrivate::CallSession *session = static_cast<LinphonePrivate::CallSession *>(op->getUserPointer());
 	std::shared_ptr<Address> referToAddr = Address::create();
 	referToAddr->setImpl(referTo);
@@ -645,7 +744,12 @@ static void call_refer_received(SalOp *op, const SalAddress *referTo) {
 		auto sessionRef = session->getSharedFromThis();
 		L_GET_PRIVATE(sessionRef)->referred(referToAddr);
 	} else {
-		linphone_core_notify_refer_received(lc, L_STRING_TO_C(referToAddr->toString()));
+		LinphoneContent *content = linphone_content_from_sal_body_handler(body_handler);
+		linphone_core_notify_refer_received(lc, referToAddr->toC(),
+		                                    reinterpret_cast<const LinphoneHeaders *>(custom_headers), content);
+		if (content) {
+			linphone_content_unref(content);
+		}
 	}
 }
 
@@ -784,8 +888,10 @@ static bool_t fill_auth_info(LinphoneCore *lc, SalAuthInfo *sai) {
 			case SalAuthModeBearer: {
 				auto cppAi = AuthInfo::toCpp(ai)->getSharedFromThis();
 				auto accessToken = cppAi->getAccessToken();
-				if (accessToken == nullptr || accessToken->isExpired()) {
-					lInfo() << "Absent or expired access token, using refresh token to obtain new one.";
+				bool expired = accessToken ? accessToken->isExpired() : false;
+				if (accessToken == nullptr || expired) {
+					lInfo() << "Access token is [" << (expired ? "expired" : "absent")
+					        << "], using refresh token to obtain new one.";
 					L_GET_CPP_PTR_FROM_C_OBJECT(lc)->refreshTokens(cppAi);
 				} else {
 					sai->bearer_token = cppAi->getAccessToken()->getImpl()->toC();
@@ -816,9 +922,9 @@ static bool_t auth_requested(Sal *sal, SalAuthInfo *sai) {
 	if (fill_auth_info(lc, sai)) {
 		return TRUE;
 	} else {
-		/* only HttpDigest Mode requests App for credentials, TLS client cert does not support callback so the
-		 * authentication credential MUST be provided by the application before the connection without prompt from the
-		 * library */
+		/* only HttpDigest and Bearer method request application for credentials, TLS client cert does not support
+		 * callback so the authentication credential MUST be provided by the application before the connection without
+		 * prompt from the library */
 		switch (sai->mode) {
 			case SalAuthModeHttpDigest: {
 				LinphoneAuthInfo *ai =
@@ -903,10 +1009,14 @@ static void message_delivery_update(SalOp *op, SalMessageDeliveryStatus status) 
 	auto chatRoom = msg->getChatRoom();
 	// Check that the message does not belong to an already destroyed chat room - if so, do not invoke callbacks
 	if (chatRoom) {
-		L_GET_PRIVATE(msg)->setParticipantState(
-		    chatRoom->getMe()->getAddress(),
-		    (LinphonePrivate::ChatMessage::State)chatStatusSal2Linphone(lc, status, op->getErrorInfo()),
-		    ::ms_time(NULL));
+		const auto &me = chatRoom->getMe();
+		if (me) {
+			auto errorInfo = op->getErrorInfo();
+			auto reason = errorInfo ? linphone_reason_from_sal(errorInfo->reason) : LinphoneReasonNone;
+			L_GET_PRIVATE(msg)->setParticipantState(
+			    me->getAddress(), (LinphonePrivate::ChatMessage::State)chatStatusSal2Linphone(lc, status, errorInfo),
+			    ::ms_time(NULL), reason);
+		}
 	}
 }
 
@@ -931,7 +1041,7 @@ static void subscribe_response(SalOp *op, SalSubscribeStatus status, int will_re
 		if (will_retry && linphone_core_get_global_state(lc) != LinphoneGlobalShutdown) {
 			linphone_event_set_state(lev, LinphoneSubscriptionOutgoingProgress);
 		} else {
-			// If it is in GlobalShutDown state, the remote conference event handler may be destroyed by the time this
+			// If it is in GlobalShutDown state, the client conference event handler may be destroyed by the time this
 			// event reaches the state changed callback Subscriptipn are terminated by destructors
 			if (linphone_core_get_global_state(lc) == LinphoneGlobalShutdown) {
 				linphone_event_set_user_data(lev, NULL);
@@ -956,44 +1066,49 @@ static void notify(SalSubscribeOp *op, SalSubscribeStatus st, const char *eventn
 		}
 	}
 	linphone_event_ref(lev);
-	{
-		LinphoneContent *ct = linphone_content_from_sal_body_handler(body_handler);
-		linphone_core_notify_notify_received(lc, lev, eventname, ct);
-		LINPHONE_HYBRID_OBJECT_INVOKE_CBS(Event, Event::toCpp(lev), linphone_event_cbs_get_notify_received, ct);
-		if (ct) {
-			linphone_content_unref(ct);
-		}
+	if ((!out_of_dialog) && (st != SalSubscribeNone)) {
+		linphone_event_set_state(lev, linphone_subscription_state_from_sal(st));
 	}
-	if (out_of_dialog) {
-		/*out of dialog NOTIFY do not create an implicit subscription*/
-		linphone_event_set_state(lev, LinphoneSubscriptionTerminated);
-	} else if (st != SalSubscribeNone) {
-		/* Take into account that the subscription may have been closed by app already within
-		 * linphone_core_notify_notify_received() */
-		if (linphone_event_get_subscription_state(lev) != LinphoneSubscriptionTerminated) {
-			linphone_event_set_state(lev, linphone_subscription_state_from_sal(st));
+
+	/* Take into account that the subscription may have been closed by app already within the callback of
+	 * linphone_event_set_state() */
+	if (linphone_event_get_subscription_state(lev) != LinphoneSubscriptionTerminated) {
+		{
+			LinphoneContent *ct = linphone_content_from_sal_body_handler(body_handler);
+			linphone_core_notify_notify_received(lc, lev, eventname, ct);
+			LINPHONE_HYBRID_OBJECT_INVOKE_CBS(Event, Event::toCpp(lev), linphone_event_cbs_get_notify_received, ct);
+			if (ct) {
+				linphone_content_unref(ct);
+			}
+		}
+		if (out_of_dialog) {
+			/*out of dialog NOTIFY do not create an implicit subscription*/
+			linphone_event_set_state(lev, LinphoneSubscriptionTerminated);
 		}
 	}
 	linphone_event_unref(lev);
 }
 
 static void subscribe_received(SalSubscribeOp *op, const char *eventname, const SalBodyHandler *body_handler) {
-	LinphoneEvent *lev = (LinphoneEvent *)op->getUserPointer();
-	LinphoneCore *lc = (LinphoneCore *)op->getSal()->getUserPointer();
+	auto lev = (LinphoneEvent *)op->getUserPointer();
+	auto lc = (LinphoneCore *)op->getSal()->getUserPointer();
 
 	if (!check_core_state(lc, op)) return;
 
-	if (lev == NULL) {
+	if (lev == nullptr) {
 		lev = linphone_event_new_subscribe_with_op(lc, op, LinphoneSubscriptionIncoming, eventname);
-		Event::toCpp(lev)->setUnrefWhenTerminated(TRUE);
+		auto cppLev = Event::toCpp(lev)->getSharedFromThis();
+		cppLev->setUnrefWhenTerminated(TRUE);
 		if (strcmp(linphone_event_get_name(lev), "conference") == 0) linphone_event_set_internal(lev, TRUE);
 		linphone_event_set_state(lev, LinphoneSubscriptionIncomingReceived);
 		LinphoneContent *ct = linphone_content_from_sal_body_handler(body_handler);
-		LinphoneAccount *account = linphone_core_lookup_known_account(lc, Address(op->getTo()).toC());
-		if (account && linphone_account_params_get_realm(linphone_account_get_params(account))) {
-			op->setRealm(linphone_account_params_get_realm(linphone_account_get_params(account)));
-		}
+		auto nbRefBeforeCbs = cppLev->getRefCount();
 		linphone_core_notify_subscribe_received(lc, lev, eventname, ct);
+		auto nbRefAfterCbs = cppLev->getRefCount();
+		if ((nbRefAfterCbs <= nbRefBeforeCbs) &&
+		    (linphone_event_get_subscription_state(lev) == LinphoneSubscriptionIncomingReceived)) {
+			linphone_event_terminate(lev);
+		}
 		if (ct) linphone_content_unref(ct);
 	} else {
 		/*subscribe refresh, unhandled*/
@@ -1049,6 +1164,8 @@ static void on_publish_response(SalOp *op) {
 	const SalErrorInfo *ei = op->getErrorInfo();
 
 	if (lev == NULL) return;
+	LinphoneCore *lc = static_cast<LinphoneCore *>(op->getSal()->getUserPointer());
+	if (linphone_core_get_global_state(lc) != LinphoneGlobalOn) return;
 	if (ei->reason == SalReasonNone) {
 		if (linphone_event_get_publish_state(lev) != LinphonePublishTerminating) {
 			SalPublishOp *publishOp = static_cast<SalPublishOp *>(op);
@@ -1079,13 +1196,11 @@ static void on_expire(SalOp *op) {
 		linphone_event_set_state(lev, LinphoneSubscriptionExpiring);
 	}
 
+	/* FIXME: the Account should simply use the EventCbs to get notified of Expiring state */
 	void *user_data = linphone_event_get_user_data(lev);
 	const char *event_name = linphone_event_get_name(lev);
 	if (user_data && event_name && linphone_event_is_internal(lev) && strcmp(event_name, "presence") == 0) {
-		LinphoneCore *lc = (LinphoneCore *)op->getSal()->getUserPointer();
-		LinphoneAddress *identity_address = (LinphoneAddress *)user_data;
-		auto account = L_GET_CPP_PTR_FROM_C_OBJECT(lc)->findAccountByIdentityAddress(
-		    Address::toCpp(identity_address)->getSharedFromThis());
+		Account *account = (Account *)user_data;
 		if (account) {
 			lInfo() << "Presence publish about to expire, manually refreshing it for account [" << account << "]";
 			account->sendPublish();
@@ -1115,119 +1230,55 @@ static void on_notify_response(SalOp *op) {
 	}
 }
 
-static void refer_received(SalOp *op, const SalAddress *refer_to) {
-	char *refer_uri = sal_address_as_string(refer_to);
-	std::shared_ptr<LinphonePrivate::Address> referAddr = LinphonePrivate::Address::create(refer_uri);
-	bctbx_free(refer_uri);
-	LinphoneCore *lc = static_cast<LinphoneCore *>(op->getSal()->getUserPointer());
-	std::shared_ptr<LinphonePrivate::Address> to = LinphonePrivate::Address::create(op->getTo());
-	std::shared_ptr<LinphonePrivate::Address> from = LinphonePrivate::Address::create(op->getFrom());
-	if (sal_address_has_param(refer_to, "text")) {
-		if (referAddr && referAddr->isValid()) {
+static void refer_received(SalOp *op,
+                           const SalAddress *refer_to,
+                           const SalCustomHeader *custom_headers,
+                           const SalBodyHandler *body_handler) {
+	char *referToUri = sal_address_as_string(refer_to);
+	std::shared_ptr<LinphonePrivate::Address> referToAddr = LinphonePrivate::Address::create(referToUri);
+	bctbx_free(referToUri);
+	if (referToAddr) {
+		LinphoneCore *lc = static_cast<LinphoneCore *>(op->getSal()->getUserPointer());
 
+		if (referToAddr->isValid()) {
 			if (linphone_core_get_global_state(lc) != LinphoneGlobalOn) {
 				static_cast<SalReferOp *>(op)->reply(SalReasonDeclined);
 				return;
 			}
 
-			if (referAddr->hasUriParam("method") && (referAddr->getUriParamValue("method") == "BYE")) {
-				if (linphone_core_conference_server_enabled(lc)) {
-					// Removal of a participant at the server side
-					shared_ptr<Conference> chatRoom =
-					    L_GET_CPP_PTR_FROM_C_OBJECT(lc)->findConference(ConferenceId(to, to));
-					if (chatRoom) {
-						std::shared_ptr<Participant> participant = chatRoom->findParticipant(from);
-						if (!participant || !participant->isAdmin()) {
-							static_cast<SalReferOp *>(op)->reply(SalReasonDeclined);
-							return;
-						}
-						participant = chatRoom->findParticipant(referAddr);
-						if (participant) chatRoom->removeParticipant(participant);
-						static_cast<SalReferOp *>(op)->reply(SalReasonNone);
-						return;
-					}
-				} else {
-					// The server asks a participant to leave a chat room
-					auto chatRoom = L_GET_CPP_PTR_FROM_C_OBJECT(lc)->findConference(ConferenceId(referAddr, to));
-					if (chatRoom) {
-						chatRoom->leave();
-						static_cast<SalReferOp *>(op)->reply(SalReasonNone);
-						return;
-					}
-					static_cast<SalReferOp *>(op)->reply(SalReasonDeclined);
-				}
+			std::string method;
+			if (referToAddr->hasUriParam("method")) {
+				method = referToAddr->getUriParamValue("method");
+			}
+			std::shared_ptr<LinphonePrivate::Address> to = LinphonePrivate::Address::create(op->getTo());
+			std::shared_ptr<Conference> conference;
+			std::shared_ptr<Core> core = L_GET_CPP_PTR_FROM_C_OBJECT(lc);
+			const auto conferenceIdParams = core->createConferenceIdParams();
+			if (linphone_core_conference_server_enabled(lc)) {
+				// Removal of a participant at the server side
+				conference = core->findConference(ConferenceId(to, to, conferenceIdParams), false);
 			} else {
-				if (linphone_core_conference_server_enabled(lc)) {
-#ifdef HAVE_ADVANCED_IM
-					shared_ptr<Conference> chatRoom =
-					    L_GET_CPP_PTR_FROM_C_OBJECT(lc)->findConference(ConferenceId(to, to));
-					if (chatRoom) {
-						shared_ptr<Participant> participant = chatRoom->findParticipant(from);
-						if (!participant || !participant->isAdmin()) {
-							static_cast<SalReferOp *>(op)->reply(SalReasonForbidden);
-							return;
-						}
-						if (referAddr->hasParam("admin")) {
-							participant = chatRoom->findParticipant(referAddr);
-							if (participant) {
-								bool value = Utils::stob(referAddr->getParamValue("admin"));
-								chatRoom->setParticipantAdminStatus(participant, value);
-								static_cast<SalReferOp *>(op)->reply(SalReasonNone);
-								return;
-							}
-						} else {
-							participant = static_pointer_cast<ServerConference>(chatRoom)->findParticipant(referAddr);
-							if (!participant) {
-								bool ret = static_pointer_cast<ServerConference>(chatRoom)->addParticipant(referAddr);
-								static_cast<SalReferOp *>(op)->reply(ret ? SalReasonNone : SalReasonNotAcceptable);
-								return;
-							}
-							lInfo() << "Participant with address " << *referAddr << " is already a member of chatroom "
-							        << *chatRoom->getConferenceAddress();
-						}
-					}
-#else
-					ms_warning("Advanced IM such as group chat is disabled!");
-#endif
-				}
+				conference = core->findConference(ConferenceId(referToAddr, to, conferenceIdParams), false);
+			}
+			SalReferOp *referOp = dynamic_cast<SalReferOp *>(op);
+			if (conference && referOp) {
+				conference->handleRefer(referOp, referToAddr, method);
+				return;
 			}
 		}
+
+		// Out-of-dialog REFER to be notified to the user, even if the Refer-To address is not a valid SIP address,
+		// it can be an absolute URI.
+		LinphoneContent *content = linphone_content_from_sal_body_handler(body_handler);
+		linphone_core_notify_refer_received(lc, referToAddr->toC(),
+		                                    reinterpret_cast<const LinphoneHeaders *>(custom_headers), content);
+		if (content) {
+			linphone_content_unref(content);
+		}
+		static_cast<SalReferOp *>(op)->reply(SalReasonNone);
 	} else {
-		shared_ptr<Conference> conference = L_GET_CPP_PTR_FROM_C_OBJECT(lc)->findConference(ConferenceId(to, to));
-
-		if (conference) {
-			auto participant = conference->findParticipant(from);
-			if (!participant || !participant->isAdmin()) {
-				static_cast<SalReferOp *>(op)->reply(SalReasonForbidden);
-				return;
-			}
-
-			if (referAddr->hasUriParam("method") && (referAddr->getUriParamValue("method") == "BYE")) {
-				if (participant) conference->removeParticipant(referAddr);
-				static_cast<SalReferOp *>(op)->reply(SalReasonNone);
-				return;
-			} else {
-				auto participant = conference->findParticipant(referAddr);
-				if (referAddr->hasParam("admin")) {
-					if (participant) {
-						bool value = Utils::stob(referAddr->getParamValue("admin"));
-						conference->setParticipantAdminStatus(participant, value);
-						static_cast<SalReferOp *>(op)->reply(SalReasonNone);
-						return;
-					}
-				} else {
-					if (!participant) {
-						auto participantInfo = Factory::get()->createParticipantInfo(referAddr);
-						participantInfo->setRole(Participant::Role::Speaker);
-						bool ret = conference->addParticipant(participantInfo);
-						static_cast<SalReferOp *>(op)->reply(ret ? SalReasonNone : SalReasonNotAcceptable);
-						return;
-					}
-				}
-			}
-		}
+		static_cast<SalReferOp *>(op)->reply(SalReasonDeclined);
 	}
-	static_cast<SalReferOp *>(op)->reply(SalReasonDeclined);
 }
 
 static int process_redirect(SalOp *op) {

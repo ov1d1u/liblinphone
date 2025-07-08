@@ -161,7 +161,7 @@ LINPHONE_PUBLIC void linphone_friend_remove_phone_number_with_label(LinphoneFrie
                                                                     const LinphoneFriendPhoneNumber *phone_number);
 
 /**
- * Set the display name for this friend
+ * Sets the display name for this friend
  * @param linphone_friend #LinphoneFriend object @notnil
  * @param name the display name to set @maybenil
  * @return 0 if successful, -1 otherwise
@@ -169,11 +169,41 @@ LINPHONE_PUBLIC void linphone_friend_remove_phone_number_with_label(LinphoneFrie
 LINPHONE_PUBLIC LinphoneStatus linphone_friend_set_name(LinphoneFriend *linphone_friend, const char *name);
 
 /**
- * Get the display name for this friend
+ * Sets the last name for this friend if vCard is available
+ * @param linphone_friend #LinphoneFriend object @notnil
+ * @param last_name the last name to set @maybenil
+ * @return 0 if successful, -1 otherwise
+ */
+LINPHONE_PUBLIC LinphoneStatus linphone_friend_set_last_name(LinphoneFriend *linphone_friend, const char *last_name);
+
+/**
+ * Sets the first name for this friend is available
+ * @param linphone_friend #LinphoneFriend object @notnil
+ * @param first_name the first name to set @maybenil
+ * @return 0 if successful, -1 otherwise
+ */
+LINPHONE_PUBLIC LinphoneStatus linphone_friend_set_first_name(LinphoneFriend *linphone_friend, const char *first_name);
+
+/**
+ * Gets the display name for this friend
  * @param linphone_friend #LinphoneFriend object @notnil
  * @return The display name of this friend. @maybenil
  */
 LINPHONE_PUBLIC const char *linphone_friend_get_name(const LinphoneFriend *linphone_friend);
+
+/**
+ * Gets the last name for this friend if vCard exists
+ * @param linphone_friend #LinphoneFriend object @notnil
+ * @return The last name of this friend. @maybenil
+ */
+LINPHONE_PUBLIC const char *linphone_friend_get_last_name(const LinphoneFriend *linphone_friend);
+
+/**
+ * Gets the first name for this friend if vCard exists
+ * @param linphone_friend #LinphoneFriend object @notnil
+ * @return The first name of this friend. @maybenil
+ */
+LINPHONE_PUBLIC const char *linphone_friend_get_first_name(const LinphoneFriend *linphone_friend);
 
 /**
  * get subscription flag value
@@ -324,6 +354,13 @@ LINPHONE_PUBLIC const char *linphone_friend_get_ref_key(const LinphoneFriend *li
 LINPHONE_PUBLIC bool_t linphone_friend_in_list(const LinphoneFriend *linphone_friend);
 
 /**
+ * Check that the given friend is in a friend list.
+ * @param linphone_friend #LinphoneFriend object. @notnil
+ * @return The #LinphoneFriendList the friend is in if any, NULL otherwise. @maybenil
+ **/
+LINPHONE_PUBLIC LinphoneFriendList *linphone_friend_get_friend_list(const LinphoneFriend *linphone_friend);
+
+/**
  * Acquire a reference to the linphone friend.
  * @param linphone_friend #LinphoneFriend object @notnil
  * @return The same #LinphoneFriend object @notnil
@@ -349,6 +386,13 @@ LINPHONE_PUBLIC LinphoneCore *linphone_friend_get_core(const LinphoneFriend *lin
  * @return the #LinphoneVcard or NULL. @maybenil
  */
 LINPHONE_PUBLIC LinphoneVcard *linphone_friend_get_vcard(const LinphoneFriend *linphone_friend);
+
+/**
+ * Returns the a string matching the vCard inside the friend, if any
+ * @param linphone_friend #LinphoneFriend object @notnil
+ * @return the vCard as a string or NULL. @maybenil
+ */
+LINPHONE_PUBLIC const char *linphone_friend_dump_vcard(const LinphoneFriend *linphone_friend);
 
 /**
  * Binds a vCard object to a friend

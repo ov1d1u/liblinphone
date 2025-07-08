@@ -93,7 +93,71 @@ static void version_comparisons(void) {
 	BC_ASSERT_TRUE(Version("1.0.0") < Version("1.0.1-pre.1"));
 }
 
-static void address_comparisons(void) {
+static void timestamp_pruning(void) {
+	// UTC
+	// No fractional part
+	std::string utcTimestamp = "2024-10-23T14:02:13,000000Z";
+	long long expectedUtcTimestamp = 1729692133;
+	auto convertedUtcTimestamp = Utils::iso8601ToTime(utcTimestamp);
+	BC_ASSERT_EQUAL((long long)convertedUtcTimestamp, expectedUtcTimestamp, long long, "%lld");
+	auto backConvertedUtcTimestamp = Utils::timeToIso8601(convertedUtcTimestamp);
+	std::string utcTimestampBackConvertion =
+#ifdef __APPLE__
+	    "2024-10-23T14:02:13Z";
+#else
+	    "2024-10-23T14:02:13+0000";
+#endif // __APPLE__
+	BC_ASSERT_STRING_EQUAL(backConvertedUtcTimestamp.c_str(), utcTimestampBackConvertion.c_str());
+
+	// With fractional part
+	std::string utcCommaTimestamp = "2024-10-23T14:02:13,000000Z";
+	auto convertedUtcCommaTimestamp = Utils::iso8601ToTime(utcCommaTimestamp);
+	BC_ASSERT_EQUAL((long long)convertedUtcCommaTimestamp, expectedUtcTimestamp, long long, "%lld");
+	auto backConvertedFractionalUtcTimestamp = Utils::timeToIso8601(convertedUtcCommaTimestamp);
+	BC_ASSERT_STRING_EQUAL(backConvertedFractionalUtcTimestamp.c_str(), utcTimestampBackConvertion.c_str());
+
+	std::string utcDotTimestamp = "2024-10-23T14:02:13.000000Z";
+	auto convertedUtcDotTimestamp = Utils::iso8601ToTime(utcDotTimestamp);
+	BC_ASSERT_EQUAL((long long)convertedUtcDotTimestamp, expectedUtcTimestamp, long long, "%lld");
+
+	// Positive offset
+	std::string offsetPlusCommaTimestamp = "2024-10-23T14:02:13,000000+0100";
+	long long expectedOffsetPlusTimestamp = 1729688533;
+	auto convertedOffsetPlusCommaTimestamp = Utils::iso8601ToTime(offsetPlusCommaTimestamp);
+	BC_ASSERT_EQUAL((long long)convertedOffsetPlusCommaTimestamp, expectedOffsetPlusTimestamp, long long, "%lld");
+	auto backConvertedOffsetPlusTimestamp = Utils::timeToIso8601(convertedOffsetPlusCommaTimestamp);
+	std::string offsetPlusTimestampBackConvertion =
+#ifdef __APPLE__
+	    "2024-10-23T13:02:13Z";
+#else
+	    "2024-10-23T13:02:13+0000";
+#endif // __APPLE__
+	BC_ASSERT_STRING_EQUAL(backConvertedOffsetPlusTimestamp.c_str(), offsetPlusTimestampBackConvertion.c_str());
+
+	std::string offsetPlusDotTimestamp = "2024-10-23T14:02:13.000000+01";
+	auto convertedOffsetPlusDotTimestamp = Utils::iso8601ToTime(offsetPlusDotTimestamp);
+	BC_ASSERT_EQUAL((long long)convertedOffsetPlusDotTimestamp, expectedOffsetPlusTimestamp, long long, "%lld");
+
+	// Negative offset
+	std::string offsetMinusCommaTimestamp = "2024-10-23T14:02:13,000000-0100";
+	long long expectedOffsetMinusTimestamp = 1729695733;
+	auto convertedOffsetMinusCommaTimestamp = Utils::iso8601ToTime(offsetMinusCommaTimestamp);
+	BC_ASSERT_EQUAL((long long)convertedOffsetMinusCommaTimestamp, expectedOffsetMinusTimestamp, long long, "%lld");
+	auto backConvertedOffsetMinusTimestamp = Utils::timeToIso8601(convertedOffsetMinusCommaTimestamp);
+	std::string offsetMinusTimestampBackConvertion =
+#ifdef __APPLE__
+	    "2024-10-23T15:02:13Z";
+#else
+	    "2024-10-23T15:02:13+0000";
+#endif // __APPLE__
+	BC_ASSERT_STRING_EQUAL(backConvertedOffsetMinusTimestamp.c_str(), offsetMinusTimestampBackConvertion.c_str());
+
+	std::string offsetMinusDotTimestamp = "2024-10-23T14:02:13.000000-01";
+	auto convertedOffsetMinusDotTimestamp = Utils::iso8601ToTime(offsetMinusDotTimestamp);
+	BC_ASSERT_EQUAL((long long)convertedOffsetMinusDotTimestamp, expectedOffsetMinusTimestamp, long long, "%lld");
+}
+
+static void address_comparisons() {
 	Address a1("sip:toto@sip.example.org;a=dada;b=dede;c=didi;d=dodo");
 	BC_ASSERT_TRUE(a1.isValid());
 	Address a2("sip:toto@sip.example.org;b=dede;a=dada;d=dodo;c=didi");
@@ -113,7 +177,20 @@ static void address_comparisons(void) {
 	BC_ASSERT_FALSE(a3.weakEqual(a4));
 }
 
-static void conferenceId_comparisons(void) {
+static void address_serialization() {
+	Address a("sip:toto@sip.example.org;b=dede;a=dada;d=dodo;c=didi");
+	Address b("<sip:toto@sip.example.org;b=dede;a=dada;d=dodo;c=didi>");
+	Address c("<sip:toto@sip.example.org;b=dede;a=dada;d=dodo;c=didi>;f=dudu;e=caca");
+
+	string result = a.toStringUriOnlyOrdered();
+	BC_ASSERT_STRING_EQUAL(result.c_str(), "sip:toto@sip.example.org;a=dada;b=dede;c=didi;d=dodo");
+	result = b.toStringUriOnlyOrdered();
+	BC_ASSERT_STRING_EQUAL(result.c_str(), "sip:toto@sip.example.org;a=dada;b=dede;c=didi;d=dodo");
+	result = c.toStringUriOnlyOrdered();
+	BC_ASSERT_STRING_EQUAL(result.c_str(), "sip:toto@sip.example.org;a=dada;b=dede;c=didi;d=dodo");
+}
+
+static void conferenceId_comparisons() {
 	std::shared_ptr<Address> a1 = Address::create("sip:toto@sip.example.org;a=dada;b=dede;c=didi;d=dodo");
 	std::shared_ptr<Address> a2 = Address::create("sip:toto@sip.example.org;b=dede;a=dada;d=dodo;c=didi");
 	std::shared_ptr<Address> a3 = Address::create("sip:toto@sip.example.org;d=dodo;c=didi;b=dede");
@@ -124,13 +201,16 @@ static void conferenceId_comparisons(void) {
 	std::shared_ptr<Address> b3 = Address::create("sip:popo@sip.example.org;d=dodo;c=didi;b=dede");
 	std::shared_ptr<Address> b4 = Address::create("sip:popo@sip.example.org;d=tutu;c=didi;b=dede");
 
-	ConferenceId c1(a1, b1);
-	ConferenceId c2(a2, b2);
-	ConferenceId c3(a1, b3);
-	ConferenceId c4(a3, b2);
-	ConferenceId c5(a3, b3);
-	ConferenceId c6(a4, b3);
-	ConferenceId c7(a3, b4);
+	ConferenceIdParams conferenceIdParams;
+	conferenceIdParams.enableExtractUri(false);
+	conferenceIdParams.setKeepGruu(false);
+	ConferenceId c1(a1, b1, conferenceIdParams);
+	ConferenceId c2(a2, b2, conferenceIdParams);
+	ConferenceId c3(a1, b3, conferenceIdParams);
+	ConferenceId c4(a3, b2, conferenceIdParams);
+	ConferenceId c5(a3, b3, conferenceIdParams);
+	ConferenceId c6(a4, b3, conferenceIdParams);
+	ConferenceId c7(a3, b4, conferenceIdParams);
 	BC_ASSERT_TRUE(c1 == c2);
 	BC_ASSERT_TRUE(c3 == c2);
 	BC_ASSERT_TRUE(c1 == c4);
@@ -152,11 +232,13 @@ static void parse_capabilities(void) {
 }
 
 // clang-format off
-test_t utils_tests[] = {
+static test_t utils_tests[] = {
     TEST_NO_TAG("split", split),
     TEST_NO_TAG("trim", trim),
+    TEST_NO_TAG("Timestamp pruning", timestamp_pruning),
     TEST_NO_TAG("Version comparisons", version_comparisons),
     TEST_NO_TAG("Address comparisons", address_comparisons),
+    TEST_NO_TAG("Address serialization", address_serialization),
     TEST_NO_TAG("Conference ID comparisons", conferenceId_comparisons),
     TEST_NO_TAG("Parse capabilities", parse_capabilities)
 };

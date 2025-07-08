@@ -31,6 +31,11 @@
 
 LINPHONE_BEGIN_NAMESPACE
 
+void NotifyConferenceListener::onAllowedParticipantListChanged(
+    BCTBX_UNUSED(const std::shared_ptr<ConferenceNotifiedEvent> &event)) {
+	_linphone_conference_notify_allowed_participant_list_changed(conf->toC());
+}
+
 void NotifyConferenceListener::onParticipantAdded(
     BCTBX_UNUSED(const std::shared_ptr<ConferenceParticipantEvent> &event),
     const std::shared_ptr<Participant> &participant) {
@@ -112,12 +117,18 @@ void NotifyConferenceListener::onParticipantDeviceRemoved(
 	_linphone_conference_notify_participant_device_removed(conf->toC(), device->toC());
 }
 
+void NotifyConferenceListener::onParticipantDeviceJoiningRequest(
+    BCTBX_UNUSED(const std::shared_ptr<ConferenceParticipantDeviceEvent> &event),
+    const std::shared_ptr<ParticipantDevice> &device) {
+	_linphone_conference_notify_participant_device_joining_request(conf->toC(), device->toC());
+}
+
 void NotifyConferenceListener::onStateChanged(ConferenceInterface::State newState) {
 	_linphone_conference_notify_state_changed(conf->toC(), (LinphoneConferenceState)newState);
 }
 
 void NotifyConferenceListener::onActiveSpeakerParticipantDevice(const std::shared_ptr<ParticipantDevice> &device) {
-	_linphone_conference_notify_active_speaker_participant_device(conf->toC(), device->toC());
+	_linphone_conference_notify_active_speaker_participant_device(conf->toC(), device ? device->toC() : nullptr);
 }
 
 void NotifyConferenceListener::onFullStateReceived() {

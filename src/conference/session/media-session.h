@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010-2022 Belledonne Communications SARL.
+ * Copyright (c) 2010-2025 Belledonne Communications SARL.
  *
  * This file is part of Liblinphone
  * (see https://gitlab.linphone.org/BC/public/liblinphone).
@@ -57,10 +57,7 @@ class LINPHONE_PUBLIC MediaSession : public CallSession {
 public:
 	ConferenceLayout computeConferenceLayout(const std::shared_ptr<SalMediaDescription> &md) const;
 
-	MediaSession(const std::shared_ptr<Core> &core,
-	             std::shared_ptr<Participant> me,
-	             const CallSessionParams *params,
-	             CallSessionListener *listener);
+	MediaSession(const std::shared_ptr<Core> &core, std::shared_ptr<Participant> me, const CallSessionParams *params);
 	~MediaSession();
 
 	virtual void acceptDefault() override;
@@ -70,6 +67,7 @@ public:
 	void cancelDtmfs();
 	void setNatPolicy(const std::shared_ptr<NatPolicy> &pol);
 	void setSubject(const std::string &subject);
+	bool ringingDisabled() const;
 	bool toneIndicationsEnabled() const;
 	void configure(LinphoneCallDir direction,
 	               const std::shared_ptr<Account> &account,
@@ -82,7 +80,7 @@ public:
 	bool initiateOutgoing(const std::string &subject = "",
 	                      const std::shared_ptr<const Content> content = nullptr) override;
 	void iterate(time_t currentRealTime, bool oneSecondElapsed) override;
-	LinphoneStatus pauseFromConference();
+	LinphoneStatus pauseFromConference(const MediaSessionParams *msp);
 	LinphoneStatus pause();
 	LinphoneStatus resume();
 	LinphoneStatus delayResume();
@@ -191,8 +189,7 @@ public:
 	uint32_t getSsrc(LinphoneStreamType type) const;
 	uint32_t getSsrc(std::string content) const;
 
-	int getLocalThumbnailStreamIdx() const;
-	int getThumbnailStreamIdx(const std::shared_ptr<SalMediaDescription> &md) const;
+	int getThumbnailStreamIdx() const;
 	int getMainVideoStreamIdx(const std::shared_ptr<SalMediaDescription> &md) const;
 
 	/**
@@ -203,11 +200,18 @@ public:
 	void setEkt(const MSEKTParametersSet *ekt_params) const;
 	bool dtmfSendingAllowed() const;
 
-	LinphoneMediaDirection getDirectionOfStream(const std::string content) const;
+	LinphoneMediaDirection getDirectionOfStream(const std::string &content,
+	                                            const std::string &label = std::string()) const;
 	bool isScreenSharingNegotiated() const;
 	const std::shared_ptr<const VideoSourceDescriptor> getVideoSourceDescriptor() const;
 
 	bool requestThumbnail(const std::shared_ptr<ParticipantDevice> &device) const;
+
+	void enableBaudotDetection(bool enabled);
+	void setBaudotMode(LinphoneBaudotMode mode);
+	void setBaudotSendingStandard(LinphoneBaudotStandard standard);
+	void setBaudotPauseTimeout(uint8_t seconds);
+	void sendBaudotCharacter(char character);
 
 private:
 	L_DECLARE_PRIVATE(MediaSession);

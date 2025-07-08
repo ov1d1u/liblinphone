@@ -47,6 +47,7 @@ public:
 		ConferenceCallConnected = LinphoneEventLogTypeConferenceConnected,
 		ConferenceCallEnded = LinphoneEventLogTypeConferenceCallEnded,
 		ConferenceChatMessage = LinphoneEventLogTypeConferenceChatMessage,
+		ConferenceAllowedParticipantListChanged = LinphoneEventLogTypeConferenceAllowedParticipantListChanged,
 		ConferenceParticipantAdded = LinphoneEventLogTypeConferenceParticipantAdded,
 		ConferenceParticipantRemoved = LinphoneEventLogTypeConferenceParticipantRemoved,
 		ConferenceParticipantRoleUnknown = LinphoneEventLogTypeConferenceParticipantRoleUnknown,
@@ -56,6 +57,7 @@ public:
 		ConferenceParticipantUnsetAdmin = LinphoneEventLogTypeConferenceParticipantUnsetAdmin,
 		ConferenceParticipantDeviceAdded = LinphoneEventLogTypeConferenceParticipantDeviceAdded,
 		ConferenceParticipantDeviceRemoved = LinphoneEventLogTypeConferenceParticipantDeviceRemoved,
+		ConferenceParticipantDeviceJoiningRequest = LinphoneEventLogTypeConferenceParticipantDeviceJoiningRequest,
 		ConferenceParticipantDeviceMediaCapabilityChanged =
 		    LinphoneEventLogTypeConferenceParticipantDeviceMediaCapabilityChanged,
 		ConferenceParticipantDeviceMediaAvailabilityChanged =

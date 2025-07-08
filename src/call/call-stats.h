@@ -21,7 +21,7 @@
 #ifndef _L_CALL_STATS_H_
 #define _L_CALL_STATS_H_
 
-#include <belle-sip/object++.hh>
+#include "belle-sip/object++.hh"
 
 #include "c-wrapper/c-wrapper.h"
 #include "encryption-status.h"
@@ -107,6 +107,15 @@ public:
 	const SrtpInfo *getSrtpInfo(bool isInner) const;
 	LinphoneSrtpSuite getSrtpSuite() const;
 	LinphoneMediaEncryption getSrtpSource() const;
+
+	/* RTP stats */
+	uint64_t getRtpPacketSent() const;
+	uint64_t getRtpPacketRcv() const;
+	uint64_t getRtpSent() const;
+	uint64_t getRtpRecv() const;
+	uint64_t getRtpHwRecv() const;
+	int64_t getRtpCumPacketLoss() const;
+	uint64_t getRtpDiscarded() const;
 
 private:
 	EncryptionStatus mEncryptionStatus;

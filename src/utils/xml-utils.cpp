@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010-2022 Belledonne Communications SARL.
+ * Copyright (c) 2010-2025 Belledonne Communications SARL.
  *
  * This file is part of Liblinphone
  * (see https://gitlab.linphone.org/BC/public/liblinphone).
@@ -19,6 +19,10 @@
  */
 
 #include "utils/xml-utils.h"
+
+#include "address/address.h"
+#include "core/core.h"
+#include "http/http-client.h"
 #include "logger/logger.h"
 
 // =============================================================================
@@ -44,6 +48,44 @@ MediaStatusType XmlUtils::mediaDirectionToMediaStatus(LinphoneMediaDirection dir
 			return MediaStatusType::inactive;
 	}
 	return MediaStatusType::sendrecv;
+}
+
+bool XmlUtils::sendCcmpRequest(const std::shared_ptr<Core> &core,
+                               const std::string &ccmpServerUrl,
+                               const std::shared_ptr<const Address> &from,
+                               const std::string &body,
+                               const std::function<void(const HttpResponse &)> &listener) {
+	try {
+		auto &httpClient = core->getHttpClient();
+		auto &httpRequest = httpClient.createRequest("POST", ccmpServerUrl);
+		httpRequest.addHeader("From", from->asStringUriOnly());
+
+		if (!body.empty()) {
+			auto content = Content(ContentType("application/ccmp+xml"), body);
+			httpRequest.setBody(content);
+		}
+
+		httpRequest.execute([listener](const HttpResponse &response) -> void { listener(response); });
+	} catch (const std::exception &e) {
+		lError() << __func__ << ": Error while sending CCMP request : " << e.what();
+		return false;
+	}
+
+	return true;
+}
+
+LinphoneMediaDirection XmlUtils::mediaStatusToMediaDirection(MediaStatusType status) {
+	switch (status) {
+		case MediaStatusType::inactive:
+			return LinphoneMediaDirectionInactive;
+		case MediaStatusType::sendonly:
+			return LinphoneMediaDirectionSendOnly;
+		case MediaStatusType::recvonly:
+			return LinphoneMediaDirectionRecvOnly;
+		case MediaStatusType::sendrecv:
+			return LinphoneMediaDirectionSendRecv;
+	}
+	return LinphoneMediaDirectionSendRecv;
 }
 
 LINPHONE_END_NAMESPACE

@@ -1,6 +1,6 @@
 ############################################################################
 # CMakeLists.txt
-# Copyright (c) 2010-2023 Belledonne Communications SARL.
+# Copyright (c) 2010-2024 Belledonne Communications SARL.
 #
 ############################################################################
 #
@@ -24,7 +24,6 @@
 set(ROOT_HEADER_FILES
 	account_creator_service.h
 	account_creator.h
-	buffer.h
 	call_params.h
 	call_stats.h
 	call.h
@@ -80,10 +79,12 @@ set(C_API_HEADER_FILES
 	c-alert.h
 	c-auth-info.h
 	c-api.h
+	c-buffer.h
 	c-call-cbs.h
 	c-call-log.h
 	c-call-stats.h
 	c-call.h
+	c-carddav-params.h
 	c-conference.h
 	c-conference-params.h
 	c-conference-cbs.h
@@ -129,6 +130,7 @@ set(C_API_HEADER_FILES
 	c-push-notification-config.h
 	c-recorder.h
 	c-recorder-params.h
+	c-remote-contact-directory.h
 	c-search-result.h
 	c-signal-information.h
 	c-types.h

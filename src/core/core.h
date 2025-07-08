@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010-2023 Belledonne Communications SARL.
+ * Copyright (c) 2010-2025 Belledonne Communications SARL.
  *
  * This file is part of Liblinphone
  * (see https://gitlab.linphone.org/BC/public/liblinphone).
@@ -36,6 +36,7 @@
 #include "conference/encryption/ekt-info.h"
 #endif // HAVE_ADVANCED_IM
 #include "event-log/event-log.h"
+#include "event/event-publish.h"
 #include "friend/friend-list.h"
 #include "linphone/enums/c-enums.h"
 #include "linphone/types.h"
@@ -62,6 +63,7 @@ class CallLog;
 class CallSession;
 class Conference;
 class ConferenceId;
+class ConferenceIdParams;
 class ConferenceInfo;
 class Participant;
 class CallSessionListener;
@@ -79,10 +81,12 @@ class ConferenceScheduler;
 class SalOp;
 class SignalInformation;
 class HttpClient;
+class RemoteContactDirectory;
 
 class LINPHONE_PUBLIC Core : public Object {
 	friend class Account;
 	friend class Call;
+	friend class CallLog;
 	friend class CallSession;
 	friend class ChatMessage;
 	friend class ChatMessagePrivate;
@@ -121,15 +125,15 @@ public:
 	// Return a new Core instance. Entry point of Linphone.
 	static std::shared_ptr<Core> create(LinphoneCore *cCore);
 
-	static const std::shared_ptr<Address>
+	static std::shared_ptr<const Address>
 	getConferenceFactoryAddress(const std::shared_ptr<Core> &core, const std::shared_ptr<const Address> &localAddress);
-	static const std::shared_ptr<Address> getConferenceFactoryAddress(const std::shared_ptr<Core> &core,
-	                                                                  const std::shared_ptr<Account> account);
-	static const std::shared_ptr<Address>
+	static std::shared_ptr<const Address> getConferenceFactoryAddress(const std::shared_ptr<Core> &core,
+	                                                                  const std::shared_ptr<Account> &account);
+	static std::shared_ptr<const Address>
 	getAudioVideoConferenceFactoryAddress(const std::shared_ptr<Core> &core,
 	                                      const std::shared_ptr<const Address> &localAddress);
-	static const std::shared_ptr<Address> getAudioVideoConferenceFactoryAddress(const std::shared_ptr<Core> &core,
-	                                                                            const std::shared_ptr<Account> account);
+	static std::shared_ptr<const Address>
+	getAudioVideoConferenceFactoryAddress(const std::shared_ptr<Core> &core, const std::shared_ptr<Account> &account);
 
 	// ---------------------------------------------------------------------------
 	// Application lifecycle.
@@ -180,18 +184,13 @@ public:
 	// ChatRoom.
 	// ---------------------------------------------------------------------------
 
-	std::list<std::shared_ptr<AbstractChatRoom>> getRawChatRoomList() const;
+	std::list<std::shared_ptr<AbstractChatRoom>> getRawChatRoomList(bool includeBasic = true,
+	                                                                bool includeConference = true) const;
 	std::list<std::shared_ptr<AbstractChatRoom>> &getChatRooms() const;
 	const bctbx_list_t *getChatRoomsCList() const;
 
 	std::shared_ptr<AbstractChatRoom> findChatRoom(const ConferenceId &conferenceId, bool logIfNotFound = true) const;
 	std::list<std::shared_ptr<AbstractChatRoom>> findChatRooms(const std::shared_ptr<Address> &peerAddress) const;
-
-	std::shared_ptr<AbstractChatRoom> findOneToOneChatRoom(const std::shared_ptr<const Address> &localAddress,
-	                                                       const std::shared_ptr<const Address> &participantAddress,
-	                                                       bool basicOnly,
-	                                                       bool conferenceOnly,
-	                                                       bool encrypted) const;
 
 	std::shared_ptr<AbstractChatRoom> createClientChatRoom(const std::string &subject, bool fallback = true);
 	std::shared_ptr<AbstractChatRoom> createClientChatRoom(const std::string &subject,
@@ -219,6 +218,10 @@ public:
 	LinphoneReason onSipMessageReceived(SalOp *op, const SalMessage *sal_msg);
 	LinphoneReason
 	handleChatMessagesAggregation(std::shared_ptr<AbstractChatRoom> chatRoom, SalOp *op, const SalMessage *sal_msg);
+
+	void setImdnToEverybodyThreshold(const int threshold);
+	int getImdnToEverybodyThreshold() const;
+
 	void enableEmptyChatroomsDeletion(const bool enable);
 	bool emptyChatroomsDeletionEnabled() const;
 
@@ -234,8 +237,13 @@ public:
 	// Conference.
 	// ---------------------------------------------------------------------------
 
+	ConferenceIdParams createConferenceIdParams() const;
 	void setConferenceCleanupPeriod(long seconds);
 	long getConferenceCleanupPeriod() const;
+	void setConferenceAvailabilityBeforeStart(long seconds);
+	long getConferenceAvailabilityBeforeStart() const;
+	void setConferenceExpirePeriod(long seconds);
+	long getConferenceExpirePeriod() const;
 	void insertConference(const std::shared_ptr<Conference> conference);
 	void invalidateAccountInConferencesAndChatRooms(const std::shared_ptr<Account> &account);
 	std::shared_ptr<Conference> findConference(const std::shared_ptr<const CallSession> &session,
@@ -248,6 +256,7 @@ public:
 	                                             const std::shared_ptr<const Address> &remoteAddress,
 	                                             const std::list<std::shared_ptr<Address>> &participants) const;
 	std::shared_ptr<Conference> searchConference(const std::shared_ptr<const Address> &conferenceAddress) const;
+	std::shared_ptr<Conference> searchConference(const std::string identifier) const;
 
 	// ---------------------------------------------------------------------------
 	// Paths.
@@ -329,15 +338,10 @@ public:
 
 	void handleIncomingMessageWaitingIndication(std::shared_ptr<Event> event, const Content *content);
 
-	// ---------------------------------------------------------------------------
-	// Ldap.
-	// ---------------------------------------------------------------------------
+	const std::list<std::shared_ptr<RemoteContactDirectory>> &getRemoteContactDirectories();
 
-	const std::list<std::shared_ptr<Ldap>> &getLdapList();
-	std::list<std::shared_ptr<Ldap>>::iterator getLdapIterator(int id);
-
-	void addLdap(std::shared_ptr<Ldap> ldap);
-	void removeLdap(std::shared_ptr<Ldap> ldap);
+	void addRemoteContactDirectory(std::shared_ptr<RemoteContactDirectory> remoteContactDirectory);
+	void removeRemoteContactDirectory(std::shared_ptr<RemoteContactDirectory> remoteContactDirectory);
 
 	std::shared_ptr<Address> interpretUrl(const std::string &url, bool chatOrCallUse) const;
 
@@ -363,12 +367,18 @@ public:
 	const std::list<LinphoneMediaEncryption> getSupportedMediaEncryptions() const;
 
 	std::shared_ptr<CallSession> createOrUpdateConferenceOnServer(const std::shared_ptr<ConferenceParams> &confParams,
-	                                                              const std::shared_ptr<const Address> &localAddr,
 	                                                              const std::list<Address> &participants,
 	                                                              const std::shared_ptr<Address> &confAddr,
-	                                                              CallSessionListener *listener);
+	                                                              std::shared_ptr<CallSessionListener> listener);
 
-	bool isCurrentlyAggregatingChatMessages();
+	void removeConferencePendingCreation(const std::shared_ptr<Conference> &conference);
+	void addConferencePendingCreation(const std::shared_ptr<Conference> &conference);
+
+	void removeConferenceScheduler(const std::shared_ptr<ConferenceScheduler> &scheduler);
+	void addConferenceScheduler(const std::shared_ptr<ConferenceScheduler> &scheduler);
+
+	bool canAggregateChatMessages() const;
+	bool isCurrentlyAggregatingChatMessages() const;
 	// ---------------------------------------------------------------------------
 	// Signal informations
 	// ---------------------------------------------------------------------------
@@ -399,12 +409,15 @@ public:
 	// ---------------------------------------------------------------------------
 #ifdef HAVE_ADVANCED_IM
 	std::shared_ptr<EktInfo> createEktInfoFromXml(const std::string &xmlBody) const;
-	std::string createXmlFromEktInfo(const std::shared_ptr<const EktInfo> &ei) const;
+	std::string createXmlFromEktInfo(const std::shared_ptr<const EktInfo> &ei,
+	                                 const std::shared_ptr<const Account> &account) const;
 #endif // HAVE_ADVANCED_IM
 
 	// ---------------------------------------------------------------------------
 	// Account
 	// ---------------------------------------------------------------------------
+	void setAccountDeletionTimeout(unsigned int seconds);
+	unsigned int getAccountDeletionTimeout() const;
 	void setDefaultAccount(const std::shared_ptr<Account> &account);
 	const std::shared_ptr<Account> &getDefaultAccount() const;
 	void setDefaultAccountIndex(int index);
@@ -421,8 +434,9 @@ public:
 	const std::list<std::shared_ptr<Account>> &getAccounts() const;
 	const bctbx_list_t *getAccountsCList() const;
 	std::shared_ptr<Account> lookupKnownAccount(const std::shared_ptr<const Address> uri, bool fallbackToDefault) const;
+	std::shared_ptr<Account> lookupKnownAccount(const Address &uri, bool fallbackToDefault) const;
 	std::shared_ptr<Account> findAccountByIdentityAddress(const std::shared_ptr<const Address> identity) const;
-	void removeDeletedAccounts();
+	std::shared_ptr<Account> findAccountByUsername(const std::string &username) const;
 	void releaseAccounts();
 	const bctbx_list_t *getProxyConfigList() const;
 
@@ -449,14 +463,25 @@ public:
 	void clearFriendLists();
 	const std::list<std::shared_ptr<FriendList>> &getFriendLists() const;
 
+	// ---------------------------------------------------------------------------
+	// EKT plugin
+	// ---------------------------------------------------------------------------
+
+	bool isEktPluginLoaded() const;
+	void setEktPluginLoaded(bool ektPluginLoaded);
+
 private:
 	Core();
 	void updateChatRoomList() const;
 
 	bool deleteEmptyChatrooms = true;
+	int mImdnToEverybodyThreshold = 5;
 	std::shared_ptr<SignalInformation> mSignalInformation = nullptr;
 	const ConferenceId prepareConfereceIdForSearch(const ConferenceId &conferenceId) const;
 	void clearProxyConfigList() const;
+
+	std::shared_ptr<Account> guessLocalAccountFromMalformedMessage(const std::shared_ptr<Address> &localAddress,
+	                                                               const std::shared_ptr<Address> &peerAddress);
 
 	std::list<std::string> plugins;
 #if defined(_WIN32) && !defined(_WIN32_WCE)
@@ -470,6 +495,8 @@ private:
 	int loadPlugins(const std::string &dir);
 	bool_t dlopenPlugin(const std::string &plugin_path, const std::string plugin_name);
 
+	std::list<std::shared_ptr<Conference>> mConferencesPendingCreation;
+	std::list<std::shared_ptr<ConferenceScheduler>> mSipConferenceSchedulers;
 	std::map<std::string, std::shared_ptr<LinphonePrivate::EventPublish>> mPublishByEtag;
 
 	mutable ListHolder<AbstractChatRoom> mChatRooms;
@@ -479,8 +506,11 @@ private:
 
 	unsigned int mRemainingDownloadFileCount = 0;
 	unsigned int mRemainingUploadFileCount = 0;
+	unsigned int mAccountDeletionTimeout = 32;
 
 	mutable bctbx_list_t *mCachedProxyConfigs = NULL;
+
+	bool mEktPluginLoaded = false;
 
 	L_DECLARE_PRIVATE(Core);
 	L_DISABLE_COPY(Core);

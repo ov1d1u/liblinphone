@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010-2022 Belledonne Communications SARL.
+ * Copyright (c) 2010-2025 Belledonne Communications SARL.
  *
  * This file is part of Liblinphone
  * (see https://gitlab.linphone.org/BC/public/liblinphone).
@@ -33,10 +33,6 @@
 #include "linphone/core.h"
 #include "linphone/lpconfig.h"
 #include "tester_utils.h"
-
-static int audio_device_name_match(LinphoneAudioDevice *audio_device, const char *name) {
-	return strcmp(linphone_audio_device_get_device_name(audio_device), name);
-}
 
 static void register_device(LinphoneCoreManager *mgr, MSSndCardDesc *card_desc) {
 
@@ -236,7 +232,8 @@ static void call_with_unreliable_device(void) {
 	BC_ASSERT_PTR_NOT_NULL(marie_call);
 
 	// Marie should hear ringback as well
-	BC_ASSERT_TRUE(wait_for_list(lcs, &marie->stat.number_of_LinphoneCallOutgoingRinging, 1, 5000));
+	BC_ASSERT_TRUE(
+	    wait_for_list(lcs, &marie->stat.number_of_LinphoneCallOutgoingRinging, 1, liblinphone_tester_sip_timeout));
 
 	// Ringback
 	emulate_unreliable_device(marie, &dummy2_test_snd_card_desc,
@@ -316,6 +313,9 @@ static void call_with_unreliable_device(void) {
 	BC_ASSERT_TRUE(wait_for(marie->lc, pauline->lc, &pauline->stat.number_of_LinphoneCallEnd, 1));
 	BC_ASSERT_TRUE(wait_for(marie->lc, pauline->lc, &marie->stat.number_of_LinphoneCallEnd, 1));
 
+	BC_ASSERT_TRUE(wait_for(marie->lc, pauline->lc, &pauline->stat.number_of_LinphoneCallReleased, 1));
+	BC_ASSERT_TRUE(wait_for(marie->lc, pauline->lc, &marie->stat.number_of_LinphoneCallReleased, 1));
+
 	BC_ASSERT_EQUAL(marie->stat.number_of_LinphoneCoreLastCallEnded, 1, int, "%d");
 	BC_ASSERT_EQUAL(pauline->stat.number_of_LinphoneCoreLastCallEnded, 1, int, "%d");
 
@@ -343,15 +343,15 @@ static void call_with_audio_device_change_using_public_api(void) {
 	bctbx_list_t *dev_found = NULL;
 
 	// 1st device
-	dev_found =
-	    bctbx_list_find_custom(audio_devices, (bctbx_compare_func)audio_device_name_match, DUMMY_TEST_SOUNDCARD);
+	dev_found = bctbx_list_find_custom(audio_devices, (bctbx_compare_func)liblinphone_tester_audio_device_name_match,
+	                                   DUMMY_TEST_SOUNDCARD);
 	BC_ASSERT_PTR_NOT_NULL(dev_found);
 	LinphoneAudioDevice *current_dev = (dev_found) ? (LinphoneAudioDevice *)bctbx_list_get_data(dev_found) : NULL;
 	BC_ASSERT_PTR_NOT_NULL(current_dev);
 	linphone_audio_device_ref(current_dev);
 
 	// device dummy_playback in the list
-	dev_found = bctbx_list_find_custom(audio_devices, (bctbx_compare_func)audio_device_name_match,
+	dev_found = bctbx_list_find_custom(audio_devices, (bctbx_compare_func)liblinphone_tester_audio_device_name_match,
 	                                   DUMMY_PLAYBACK_TEST_SOUNDCARD);
 	BC_ASSERT_PTR_NOT_NULL(dev_found);
 	LinphoneAudioDevice *playback_dev = (dev_found) ? (LinphoneAudioDevice *)bctbx_list_get_data(dev_found) : NULL;
@@ -359,7 +359,7 @@ static void call_with_audio_device_change_using_public_api(void) {
 	linphone_audio_device_ref(playback_dev);
 
 	// device dummy_capture in the list
-	dev_found = bctbx_list_find_custom(audio_devices, (bctbx_compare_func)audio_device_name_match,
+	dev_found = bctbx_list_find_custom(audio_devices, (bctbx_compare_func)liblinphone_tester_audio_device_name_match,
 	                                   DUMMY_CAPTURE_TEST_SOUNDCARD);
 	BC_ASSERT_PTR_NOT_NULL(dev_found);
 	LinphoneAudioDevice *capture_dev = (dev_found) ? (LinphoneAudioDevice *)bctbx_list_get_data(dev_found) : NULL;
@@ -388,14 +388,16 @@ static void call_with_audio_device_change_using_public_api(void) {
 	BC_ASSERT_PTR_NOT_NULL(marie_call);
 
 	// Pauline shall receive the call immediately
-	BC_ASSERT_TRUE(wait_for_list(lcs, &pauline->stat.number_of_LinphoneCallIncomingReceived, 1, 5000));
+	BC_ASSERT_TRUE(
+	    wait_for_list(lcs, &pauline->stat.number_of_LinphoneCallIncomingReceived, 1, liblinphone_tester_sip_timeout));
 
 	LinphoneCall *pauline_call = linphone_core_get_current_call(pauline->lc);
 	if (!BC_ASSERT_PTR_NOT_NULL(pauline_call)) goto end;
 	linphone_call_ref(pauline_call);
 
 	// Marie should hear ringback as well
-	BC_ASSERT_TRUE(wait_for_list(lcs, &marie->stat.number_of_LinphoneCallOutgoingRinging, 1, 5000));
+	BC_ASSERT_TRUE(
+	    wait_for_list(lcs, &marie->stat.number_of_LinphoneCallOutgoingRinging, 1, liblinphone_tester_sip_timeout));
 
 	// Take call - ringing ends
 	linphone_call_accept(pauline_call);
@@ -520,14 +522,16 @@ static void call_with_disconnecting_device_base(bool_t before_ringback, bool_t d
 	linphone_core_set_network_reachable(pauline->lc, TRUE);
 
 	// Pauline shall receive the call immediately
-	BC_ASSERT_TRUE(wait_for_list(lcs, &pauline->stat.number_of_LinphoneCallIncomingReceived, 1, 5000));
+	BC_ASSERT_TRUE(
+	    wait_for_list(lcs, &pauline->stat.number_of_LinphoneCallIncomingReceived, 1, liblinphone_tester_sip_timeout));
 
 	LinphoneCall *pauline_call = linphone_core_get_current_call(pauline->lc);
 	if (!BC_ASSERT_PTR_NOT_NULL(pauline_call)) goto end;
 	linphone_call_ref(pauline_call);
 
 	// Marie should hear ringback as well
-	BC_ASSERT_TRUE(wait_for_list(lcs, &marie->stat.number_of_LinphoneCallOutgoingRinging, 1, 5000));
+	BC_ASSERT_TRUE(
+	    wait_for_list(lcs, &marie->stat.number_of_LinphoneCallOutgoingRinging, 1, liblinphone_tester_sip_timeout));
 
 	// After the ringback startx, the default device is expected to be used
 	linphone_audio_device_unref(current_dev);
@@ -572,6 +576,9 @@ static void call_with_disconnecting_device_base(bool_t before_ringback, bool_t d
 
 	BC_ASSERT_TRUE(wait_for(marie->lc, pauline->lc, &pauline->stat.number_of_LinphoneCallEnd, 1));
 	BC_ASSERT_TRUE(wait_for(marie->lc, pauline->lc, &marie->stat.number_of_LinphoneCallEnd, 1));
+
+	BC_ASSERT_TRUE(wait_for(marie->lc, pauline->lc, &pauline->stat.number_of_LinphoneCallReleased, 1));
+	BC_ASSERT_TRUE(wait_for(marie->lc, pauline->lc, &marie->stat.number_of_LinphoneCallReleased, 1));
 
 	BC_ASSERT_EQUAL(marie->stat.number_of_LinphoneCoreLastCallEnded, 1, int, "%d");
 	BC_ASSERT_EQUAL(pauline->stat.number_of_LinphoneCoreLastCallEnded, 1, int, "%d");
@@ -763,14 +770,16 @@ static void simple_call_with_audio_device_change_same_audio_device_base(bool_t b
 	linphone_core_set_network_reachable(pauline->lc, TRUE);
 
 	// Pauline shall receive the call immediately
-	BC_ASSERT_TRUE(wait_for_list(lcs, &pauline->stat.number_of_LinphoneCallIncomingReceived, 1, 5000));
+	BC_ASSERT_TRUE(
+	    wait_for_list(lcs, &pauline->stat.number_of_LinphoneCallIncomingReceived, 1, liblinphone_tester_sip_timeout));
 
 	LinphoneCall *pauline_call = linphone_core_get_current_call(pauline->lc);
 	if (!BC_ASSERT_PTR_NOT_NULL(pauline_call)) goto end;
 	linphone_call_ref(pauline_call);
 
 	// Marie should hear ringback as well
-	BC_ASSERT_TRUE(wait_for_list(lcs, &marie->stat.number_of_LinphoneCallOutgoingRinging, 1, 5000));
+	BC_ASSERT_TRUE(
+	    wait_for_list(lcs, &marie->stat.number_of_LinphoneCallOutgoingRinging, 1, liblinphone_tester_sip_timeout));
 	// Check Marie's output device
 	BC_ASSERT_PTR_EQUAL(linphone_core_get_output_audio_device(marie->lc), current_dev);
 	BC_ASSERT_PTR_EQUAL(linphone_core_get_input_audio_device(marie->lc), current_dev);
@@ -801,6 +810,9 @@ static void simple_call_with_audio_device_change_same_audio_device_base(bool_t b
 
 	BC_ASSERT_TRUE(wait_for(marie->lc, pauline->lc, &pauline->stat.number_of_LinphoneCallEnd, 1));
 	BC_ASSERT_TRUE(wait_for(marie->lc, pauline->lc, &marie->stat.number_of_LinphoneCallEnd, 1));
+
+	BC_ASSERT_TRUE(wait_for(marie->lc, pauline->lc, &pauline->stat.number_of_LinphoneCallReleased, 1));
+	BC_ASSERT_TRUE(wait_for(marie->lc, pauline->lc, &marie->stat.number_of_LinphoneCallReleased, 1));
 
 	BC_ASSERT_EQUAL(marie->stat.number_of_LinphoneCoreLastCallEnded, 1, int, "%d");
 	BC_ASSERT_EQUAL(pauline->stat.number_of_LinphoneCoreLastCallEnded, 1, int, "%d");
@@ -969,7 +981,8 @@ static void simple_call_with_audio_device_change_base(bool_t during_incoming_ear
 	BC_ASSERT_PTR_EQUAL(linphone_core_get_output_audio_device(marie->lc), current_output_dev);
 
 	// Pauline shall receive the call immediately
-	BC_ASSERT_TRUE(wait_for_list(lcs, &pauline->stat.number_of_LinphoneCallIncomingReceived, 1, 5000));
+	BC_ASSERT_TRUE(
+	    wait_for_list(lcs, &pauline->stat.number_of_LinphoneCallIncomingReceived, 1, liblinphone_tester_sip_timeout));
 	BC_ASSERT_PTR_EQUAL(linphone_core_get_output_audio_device(marie->lc), current_output_dev);
 
 	LinphoneCall *pauline_call = linphone_core_get_current_call(pauline->lc);
@@ -977,7 +990,8 @@ static void simple_call_with_audio_device_change_base(bool_t during_incoming_ear
 	linphone_call_ref(pauline_call);
 
 	if (during_incoming_early_media || during_outgoing_early_media) {
-		BC_ASSERT_TRUE(wait_for_list(lcs, &pauline->stat.number_of_LinphoneCallIncomingEarlyMedia, 1, 5000));
+		BC_ASSERT_TRUE(wait_for_list(lcs, &pauline->stat.number_of_LinphoneCallIncomingEarlyMedia, 1,
+		                             liblinphone_tester_sip_timeout));
 		if (during_incoming_early_media) {
 			linphone_audio_device_unref(pauline_current_output_dev);
 			pauline_current_output_dev = dev_mux(pauline_current_output_dev, pauline_dev0, pauline_dev1);
@@ -1007,7 +1021,8 @@ static void simple_call_with_audio_device_change_base(bool_t during_incoming_ear
 			BC_ASSERT_PTR_EQUAL(linphone_core_get_output_audio_device(pauline->lc), pauline_current_output_dev);
 		}
 
-		BC_ASSERT_TRUE(wait_for_list(lcs, &marie->stat.number_of_LinphoneCallOutgoingEarlyMedia, 1, 5000));
+		BC_ASSERT_TRUE(wait_for_list(lcs, &marie->stat.number_of_LinphoneCallOutgoingEarlyMedia, 1,
+		                             liblinphone_tester_sip_timeout));
 		BC_ASSERT_EQUAL(_linphone_call_get_nb_audio_stops(marie_call), audioStreamStopped, unsigned int, "%d");
 		if (during_outgoing_early_media) {
 			linphone_audio_device_unref(current_output_dev);
@@ -1040,7 +1055,8 @@ static void simple_call_with_audio_device_change_base(bool_t during_incoming_ear
 		}
 	} else {
 		// Marie should hear ringback as well
-		BC_ASSERT_TRUE(wait_for_list(lcs, &marie->stat.number_of_LinphoneCallOutgoingRinging, 1, 5000));
+		BC_ASSERT_TRUE(
+		    wait_for_list(lcs, &marie->stat.number_of_LinphoneCallOutgoingRinging, 1, liblinphone_tester_sip_timeout));
 	}
 	// Check Marie's output device
 	BC_ASSERT_PTR_EQUAL(linphone_core_get_output_audio_device(marie->lc), current_output_dev);
@@ -1147,6 +1163,9 @@ static void simple_call_with_audio_device_change_base(bool_t during_incoming_ear
 	BC_ASSERT_TRUE(wait_for(marie->lc, pauline->lc, &pauline->stat.number_of_LinphoneCallEnd, 1));
 	BC_ASSERT_TRUE(wait_for(marie->lc, pauline->lc, &marie->stat.number_of_LinphoneCallEnd, 1));
 
+	BC_ASSERT_TRUE(wait_for(marie->lc, pauline->lc, &pauline->stat.number_of_LinphoneCallReleased, 1));
+	BC_ASSERT_TRUE(wait_for(marie->lc, pauline->lc, &marie->stat.number_of_LinphoneCallReleased, 1));
+
 	BC_ASSERT_EQUAL(marie->stat.number_of_LinphoneCoreLastCallEnded, 1, int, "%d");
 	BC_ASSERT_EQUAL(pauline->stat.number_of_LinphoneCoreLastCallEnded, 1, int, "%d");
 
@@ -1215,11 +1234,13 @@ LinphoneAudioDevice *pause_call_changing_device(bool_t enable,
 
 	BC_ASSERT_FALSE(linphone_core_is_in_conference(mgr_pausing->lc));
 	linphone_call_pause(call);
-	BC_ASSERT_TRUE(wait_for_list(lcs, &mgr_pausing->stat.number_of_LinphoneCallPausing, (noCallPausing + 1), 5000));
+	BC_ASSERT_TRUE(wait_for_list(lcs, &mgr_pausing->stat.number_of_LinphoneCallPausing, (noCallPausing + 1),
+	                             liblinphone_tester_sip_timeout));
 
-	BC_ASSERT_TRUE(
-	    wait_for_list(lcs, &mgr_paused->stat.number_of_LinphoneCallPausedByRemote, (noCallPausedByRemote + 1), 5000));
-	BC_ASSERT_TRUE(wait_for_list(lcs, &mgr_pausing->stat.number_of_LinphoneCallPaused, (noCallPaused + 1), 5000));
+	BC_ASSERT_TRUE(wait_for_list(lcs, &mgr_paused->stat.number_of_LinphoneCallPausedByRemote,
+	                             (noCallPausedByRemote + 1), liblinphone_tester_sip_timeout));
+	BC_ASSERT_TRUE(wait_for_list(lcs, &mgr_pausing->stat.number_of_LinphoneCallPaused, (noCallPaused + 1),
+	                             liblinphone_tester_sip_timeout));
 
 	LinphoneAudioDevice *next_dev = change_device(enable, mgr_change_device, current_dev, dev0, dev1);
 
@@ -1242,10 +1263,11 @@ LinphoneAudioDevice *pause_call_changing_device(bool_t enable,
 	linphone_call_resume(call);
 
 	BC_ASSERT_TRUE(wait_for_list(lcs, &mgr_pausing->stat.number_of_LinphoneCallStreamsRunning,
-	                             (noStreamRunningPausing + 1), 5000));
-	BC_ASSERT_TRUE(
-	    wait_for_list(lcs, &mgr_paused->stat.number_of_LinphoneCallStreamsRunning, (noStreamRunningPaused + 1), 5000));
-	BC_ASSERT_TRUE(wait_for_list(lcs, &mgr_pausing->stat.number_of_LinphoneCallResuming, (noCallResuming + 1), 5000));
+	                             (noStreamRunningPausing + 1), liblinphone_tester_sip_timeout));
+	BC_ASSERT_TRUE(wait_for_list(lcs, &mgr_paused->stat.number_of_LinphoneCallStreamsRunning,
+	                             (noStreamRunningPaused + 1), liblinphone_tester_sip_timeout));
+	BC_ASSERT_TRUE(wait_for_list(lcs, &mgr_pausing->stat.number_of_LinphoneCallResuming, (noCallResuming + 1),
+	                             liblinphone_tester_sip_timeout));
 
 	// Check Marie's output device
 	BC_ASSERT_PTR_EQUAL(linphone_core_get_output_audio_device(mgr_change_device->lc), next_dev);
@@ -1348,13 +1370,15 @@ static void simple_call_with_audio_device_change_during_call_pause_base(bool_t c
 	linphone_call_params_unref(marie_params);
 
 	// Pauline shall receive the call immediately
-	BC_ASSERT_TRUE(wait_for_list(lcs, &pauline->stat.number_of_LinphoneCallIncomingReceived, 1, 5000));
+	BC_ASSERT_TRUE(
+	    wait_for_list(lcs, &pauline->stat.number_of_LinphoneCallIncomingReceived, 1, liblinphone_tester_sip_timeout));
 
 	LinphoneCall *pauline_call = linphone_core_get_current_call(pauline->lc);
 	if (!BC_ASSERT_PTR_NOT_NULL(pauline_call)) goto end;
 
 	// Marie should hear ringback as well
-	BC_ASSERT_TRUE(wait_for_list(lcs, &marie->stat.number_of_LinphoneCallOutgoingRinging, 1, 5000));
+	BC_ASSERT_TRUE(
+	    wait_for_list(lcs, &marie->stat.number_of_LinphoneCallOutgoingRinging, 1, liblinphone_tester_sip_timeout));
 	// Check Marie's output device
 	BC_ASSERT_PTR_EQUAL(linphone_core_get_output_audio_device(marie->lc), marie_current_dev);
 	BC_ASSERT_PTR_EQUAL(linphone_core_get_input_audio_device(marie->lc), marie_current_dev);
@@ -1429,6 +1453,9 @@ static void simple_call_with_audio_device_change_during_call_pause_base(bool_t c
 	BC_ASSERT_TRUE(wait_for(marie->lc, pauline->lc, &pauline->stat.number_of_LinphoneCallEnd, 1));
 	BC_ASSERT_TRUE(wait_for(marie->lc, pauline->lc, &marie->stat.number_of_LinphoneCallEnd, 1));
 
+	BC_ASSERT_TRUE(wait_for(marie->lc, pauline->lc, &pauline->stat.number_of_LinphoneCallReleased, 1));
+	BC_ASSERT_TRUE(wait_for(marie->lc, pauline->lc, &marie->stat.number_of_LinphoneCallReleased, 1));
+
 	BC_ASSERT_EQUAL(marie->stat.number_of_LinphoneCoreLastCallEnded, 1, int, "%d");
 	BC_ASSERT_EQUAL(pauline->stat.number_of_LinphoneCoreLastCallEnded, 1, int, "%d");
 
@@ -1455,6 +1482,55 @@ static void simple_call_with_audio_device_change_during_call_pause_caller(void) 
 
 static void simple_call_with_audio_device_change_during_call_pause_caller_callee(void) {
 	simple_call_with_audio_device_change_during_call_pause_base(TRUE, TRUE);
+}
+
+static void simple_call_without_sound_card(void) {
+	LinphoneCoreManager *marie = linphone_core_manager_new("marie_rc");
+	LinphoneCoreManager *pauline =
+	    linphone_core_manager_new(transport_supported(LinphoneTransportTls) ? "pauline_rc" : "pauline_tcp_rc");
+	bctbx_list_t *lcs = bctbx_list_append(NULL, marie->lc);
+	lcs = bctbx_list_append(lcs, pauline->lc);
+
+	// Disable Marie's sound card and disallow the use of audio files
+	unregister_all_devices(marie);
+	linphone_core_set_use_files(marie->lc, FALSE);
+
+	LinphoneCall *marie_call = linphone_core_invite_address(marie->lc, pauline->identity);
+	BC_ASSERT_PTR_NOT_NULL(marie_call);
+
+	BC_ASSERT_TRUE(
+	    wait_for_list(lcs, &marie->stat.number_of_LinphoneCallOutgoingRinging, 1, liblinphone_tester_sip_timeout));
+	BC_ASSERT_TRUE(
+	    wait_for_list(lcs, &pauline->stat.number_of_LinphoneCallIncomingReceived, 1, liblinphone_tester_sip_timeout));
+
+	LinphoneCall *pauline_call = linphone_core_get_current_call(pauline->lc);
+	BC_ASSERT_PTR_NOT_NULL(pauline_call);
+	linphone_call_ref(pauline_call);
+
+	linphone_call_accept(pauline_call);
+
+	BC_ASSERT_TRUE(
+	    wait_for_list(lcs, &marie->stat.number_of_LinphoneCallStreamsRunning, 1, liblinphone_tester_sip_timeout));
+	BC_ASSERT_TRUE(
+	    wait_for_list(lcs, &pauline->stat.number_of_LinphoneCallStreamsRunning, 1, liblinphone_tester_sip_timeout));
+
+	const AudioStream *marie_audio_stream =
+	    (AudioStream *)linphone_call_get_stream(marie_call, LinphoneStreamTypeAudio);
+	const AudioStream *pauline_audio_stream =
+	    (AudioStream *)linphone_call_get_stream(pauline_call, LinphoneStreamTypeAudio);
+	BC_ASSERT_PTR_NOT_NULL(marie_audio_stream);
+	BC_ASSERT_PTR_NOT_NULL(pauline_audio_stream);
+
+	// Verify that Marie transmits no audio
+	BC_ASSERT_EQUAL(marie_audio_stream->soundread->desc->id, MS_FILE_PLAYER_ID, int, "%d");
+	MSPlayerState state;
+	ms_filter_call_method(marie_audio_stream->soundread, MS_PLAYER_GET_STATE, &state);
+	BC_ASSERT_EQUAL(state, MSPlayerClosed, int, "%d");
+
+	linphone_call_unref(pauline_call);
+	linphone_core_manager_destroy(marie);
+	linphone_core_manager_destroy(pauline);
+	bctbx_list_free(lcs);
 }
 
 static void simple_call_with_audio_devices_reload(void) {
@@ -1530,6 +1606,114 @@ static void simple_call_with_audio_devices_reload(void) {
 	BC_ASSERT_EQUAL(marie->stat.number_of_LinphoneCoreLastCallEnded, 1, int, "%d");
 	BC_ASSERT_EQUAL(pauline->stat.number_of_LinphoneCoreLastCallEnded, 1, int, "%d");
 
+	linphone_core_manager_destroy(pauline);
+	linphone_core_manager_destroy(marie);
+}
+
+/**
+ * @brief simple_call_with_real_audio_devices_reload
+ * Tests:
+ *  - Default device is selected on startup.
+ *  - Current default device is capturing and send audio while in call.
+ *  - Device list is updated on manual change: Activation/Deactivation/System default change.
+ *  - After changing a device, the new device is capturing and send audio while still in call.
+ *
+ *
+ * Steps:
+ *  1) Use "Default" device that should follow the system device.
+ *  2) Make a call.
+ *  3) Change the capture device (1min to do it)
+ *  4) Check if sound is received.
+ *  5) Change again the capture device (1min to do it)
+ *  6) Check if sound is received.
+ *
+ *  TODO:
+ *      - implement an automatic change by deactivating/reactivating devices using system API.
+ *      - check on playback devices.
+ *
+ */
+
+static void simple_call_with_real_audio_devices_reload(void) {
+	// Default device names (currently tested: Mac/Windows)
+	const char *defaultCaptureName = "Default Capture";
+	const char *defaultPlaybackName = "Default Playback";
+
+	ms_warning("[SCWRADR] Running manual test: Please check the console for steps.");
+
+	bctbx_list_t *lcs = NULL;
+	LinphoneCoreManager *marie = linphone_core_manager_new("marie_rc");
+	lcs = bctbx_list_append(lcs, marie->lc);
+	LinphoneCoreManager *pauline =
+	    linphone_core_manager_new(transport_supported(LinphoneTransportTls) ? "pauline_rc" : "pauline_tcp_rc");
+	lcs = bctbx_list_append(lcs, pauline->lc);
+
+	bctbx_list_t *marie_devices_start = linphone_core_get_extended_audio_devices(marie->lc);
+	bctbx_list_t *devices_it = marie_devices_start;
+
+	// Default device should be present event if no real devices.
+	BC_ASSERT_TRUE(!!devices_it);
+	const LinphoneAudioDevice *device = linphone_core_get_default_input_audio_device(marie->lc);
+	bool_t capture_set = device ? liblinphone_tester_audio_device_name_match(device, defaultCaptureName) == 0 : FALSE;
+	device = linphone_core_get_default_output_audio_device(marie->lc);
+	bool_t playback_set = device ? liblinphone_tester_audio_device_name_match(device, defaultPlaybackName) == 0 : FALSE;
+
+	BC_ASSERT_TRUE(capture_set);
+	BC_ASSERT_TRUE(playback_set);
+
+	// Setting default device to run test
+	if (!devices_it) ms_message("[SCWRADR] No devices");
+	else if (!capture_set || !playback_set) {
+		ms_message("[SCWRADR] Current devices list:");
+		while (devices_it) {
+			ms_message("[SCWRADR] %s",
+			           linphone_audio_device_get_device_name((LinphoneAudioDevice *)bctbx_list_get_data(devices_it)));
+			LinphoneAudioDevice *device = (LinphoneAudioDevice *)bctbx_list_get_data(devices_it);
+			if (!capture_set &&
+			    (linphone_audio_device_get_capabilities(device) & LinphoneAudioDeviceCapabilityRecord) &&
+			    liblinphone_tester_audio_device_name_match(device, defaultCaptureName) == 0) {
+				capture_set = TRUE;
+				linphone_core_set_default_input_audio_device(marie->lc, device);
+			}
+			if (!playback_set && (linphone_audio_device_get_capabilities(device) & LinphoneAudioDeviceCapabilityPlay) &&
+			    liblinphone_tester_audio_device_name_match(device, defaultPlaybackName) == 0) {
+				playback_set = TRUE;
+				linphone_core_set_default_output_audio_device(marie->lc, device);
+			}
+
+			devices_it = bctbx_list_next(devices_it);
+		}
+	}
+
+	ms_message("[SCWRADR] Making call");
+	BC_ASSERT_TRUE(call(marie, pauline));
+
+	ms_message("[SCWRADR] Checking if volume is received on 200ms");
+	BC_ASSERT_TRUE(liblinphone_tester_sound_detection(marie, pauline, 20000, "[SCWRADR]") == 0);
+
+	ms_message("[SCWRADR] Waiting for changing CAPTURE device (1min)");
+	BC_ASSERT_TRUE(wait_for_list(lcs, &marie->stat.number_of_LinphoneCoreAudioDevicesListUpdated,
+	                             marie->stat.number_of_LinphoneCoreAudioDevicesListUpdated + 1, 60000));
+	bctbx_list_t *new_list = linphone_core_get_extended_audio_devices(marie->lc);
+	bool_t is_new = FALSE;
+
+	bctbx_list_t *devices_changed = liblinphone_tester_find_changing_devices(marie_devices_start, new_list, &is_new);
+	devices_it = devices_changed;
+	while (devices_it) {
+		LinphoneAudioDevice *d = (LinphoneAudioDevice *)bctbx_list_get_data(devices_it);
+		ms_message("[SCWRADR] Changing Devices detected : %s", linphone_audio_device_get_device_name(d));
+		devices_it = bctbx_list_next(devices_it);
+	}
+
+	BC_ASSERT_TRUE(liblinphone_tester_sound_detection(marie, pauline, 20000, "[SCWRADR]") == 0);
+
+	end_call(marie, pauline);
+
+	BC_ASSERT_EQUAL(marie->stat.number_of_LinphoneCoreLastCallEnded, 1, int, "%d");
+	BC_ASSERT_EQUAL(pauline->stat.number_of_LinphoneCoreLastCallEnded, 1, int, "%d");
+
+	bctbx_list_free_with_data(devices_changed, (void (*)(void *))linphone_audio_device_unref);
+	bctbx_list_free_with_data(new_list, (void (*)(void *))linphone_audio_device_unref);
+	bctbx_list_free_with_data(marie_devices_start, (void (*)(void *))linphone_audio_device_unref);
 	linphone_core_manager_destroy(pauline);
 	linphone_core_manager_destroy(marie);
 }
@@ -1638,10 +1822,14 @@ simple_conference_with_audio_device_change_base(bool_t during_setup, bool_t befo
 	wait_for_list(lcs, NULL, 0, 2000);
 	linphone_call_accept(marie_call);
 
-	BC_ASSERT_TRUE(wait_for_list(lcs, &laure->stat.number_of_LinphoneConferenceStateCreationPending, 1, 5000));
-	BC_ASSERT_TRUE(wait_for_list(lcs, &laure->stat.number_of_LinphoneConferenceStateCreated, 1, 5000));
-	BC_ASSERT_TRUE(wait_for_list(lcs, &marie->stat.number_of_LinphoneConferenceStateCreationPending, 1, 5000));
-	BC_ASSERT_TRUE(wait_for_list(lcs, &marie->stat.number_of_LinphoneConferenceStateCreated, 1, 5000));
+	BC_ASSERT_TRUE(wait_for_list(lcs, &laure->stat.number_of_LinphoneConferenceStateCreationPending, 1,
+	                             liblinphone_tester_sip_timeout));
+	BC_ASSERT_TRUE(
+	    wait_for_list(lcs, &laure->stat.number_of_LinphoneConferenceStateCreated, 1, liblinphone_tester_sip_timeout));
+	BC_ASSERT_TRUE(wait_for_list(lcs, &marie->stat.number_of_LinphoneConferenceStateCreationPending, 1,
+	                             liblinphone_tester_sip_timeout));
+	BC_ASSERT_TRUE(
+	    wait_for_list(lcs, &marie->stat.number_of_LinphoneConferenceStateCreated, 1, liblinphone_tester_sip_timeout));
 
 	BC_ASSERT_TRUE(wait_for_list(lcs, &laure->stat.number_of_LinphoneCallConnected, 1, 10000));
 	BC_ASSERT_TRUE(wait_for_list(lcs, &laure->stat.number_of_LinphoneCallStreamsRunning, 1, 3000));
@@ -1662,10 +1850,14 @@ simple_conference_with_audio_device_change_base(bool_t during_setup, bool_t befo
 	LinphoneCall *pauline_call = linphone_core_get_current_call(pauline->lc);
 	BC_ASSERT_PTR_NOT_NULL(pauline_call);
 	linphone_call_accept(pauline_call);
-	BC_ASSERT_TRUE(wait_for_list(lcs, &pauline->stat.number_of_LinphoneConferenceStateCreationPending, 1, 5000));
-	BC_ASSERT_TRUE(wait_for_list(lcs, &pauline->stat.number_of_LinphoneConferenceStateCreated, 1, 5000));
-	BC_ASSERT_TRUE(wait_for_list(lcs, &laure->stat.number_of_LinphoneConferenceStateCreationPending, 1, 5000));
-	BC_ASSERT_TRUE(wait_for_list(lcs, &laure->stat.number_of_LinphoneConferenceStateCreated, 1, 5000));
+	BC_ASSERT_TRUE(wait_for_list(lcs, &pauline->stat.number_of_LinphoneConferenceStateCreationPending, 1,
+	                             liblinphone_tester_sip_timeout));
+	BC_ASSERT_TRUE(
+	    wait_for_list(lcs, &pauline->stat.number_of_LinphoneConferenceStateCreated, 1, liblinphone_tester_sip_timeout));
+	BC_ASSERT_TRUE(wait_for_list(lcs, &laure->stat.number_of_LinphoneConferenceStateCreationPending, 1,
+	                             liblinphone_tester_sip_timeout));
+	BC_ASSERT_TRUE(
+	    wait_for_list(lcs, &laure->stat.number_of_LinphoneConferenceStateCreated, 1, liblinphone_tester_sip_timeout));
 
 	BC_ASSERT_TRUE(wait_for_list(lcs, &laure->stat.number_of_LinphoneCallConnected, noParticipants, 10000));
 	BC_ASSERT_TRUE(wait_for_list(lcs, &laure->stat.number_of_LinphoneCallStreamsRunning, noParticipants, 3000));
@@ -1686,9 +1878,9 @@ simple_conference_with_audio_device_change_base(bool_t during_setup, bool_t befo
 	current_dev = change_device(after_all_join, marie, current_dev, dev0, dev1);
 
 	// wait a bit before ending the conference
-	wait_for_list(lcs, NULL, 0, 5000);
+	wait_for_list(lcs, NULL, 0, liblinphone_tester_sip_timeout);
 
-	terminate_conference(participants, laure, conf, NULL);
+	terminate_conference(participants, laure, conf, NULL, FALSE);
 
 	linphone_conference_unref(conf);
 	destroy_mgr_in_conference(marie);
@@ -1920,9 +2112,9 @@ static void simple_conference_with_audio_device_change_during_pause_base(bool_t 
 	BC_ASSERT_PTR_EQUAL(linphone_core_get_input_audio_device(pauline->lc), pauline_current_dev);
 
 	// wait a bit before ending the conference
-	wait_for_list(lcs, NULL, 0, 5000);
+	wait_for_list(lcs, NULL, 0, liblinphone_tester_sip_timeout);
 
-	terminate_conference(participants, pauline, conf, NULL);
+	terminate_conference(participants, pauline, conf, NULL, FALSE);
 
 end:
 	if (pauline_call) linphone_call_unref(pauline_call);
@@ -1993,32 +2185,34 @@ static void conference_with_simple_audio_device_change(void) {
 
 	// As new devices are prepended, they can be easily accessed and we do not run the risk of gettting a device whose
 	// type is Unknown 1st device
-	dev_found =
-	    bctbx_list_find_custom(marie_audio_devices, (bctbx_compare_func)audio_device_name_match, DUMMY_TEST_SOUNDCARD);
+	dev_found = bctbx_list_find_custom(
+	    marie_audio_devices, (bctbx_compare_func)liblinphone_tester_audio_device_name_match, DUMMY_TEST_SOUNDCARD);
 	BC_ASSERT_PTR_NOT_NULL(dev_found);
 	LinphoneAudioDevice *marie_dev0 = (dev_found) ? (LinphoneAudioDevice *)bctbx_list_get_data(dev_found) : NULL;
 	BC_ASSERT_PTR_NOT_NULL(marie_dev0);
 	linphone_audio_device_ref(marie_dev0);
 
 	// 2nd device
-	dev_found =
-	    bctbx_list_find_custom(marie_audio_devices, (bctbx_compare_func)audio_device_name_match, DUMMY2_TEST_SOUNDCARD);
+	dev_found = bctbx_list_find_custom(
+	    marie_audio_devices, (bctbx_compare_func)liblinphone_tester_audio_device_name_match, DUMMY2_TEST_SOUNDCARD);
 	BC_ASSERT_PTR_NOT_NULL(dev_found);
 	LinphoneAudioDevice *marie_dev1 = (dev_found) ? (LinphoneAudioDevice *)bctbx_list_get_data(dev_found) : NULL;
 	BC_ASSERT_PTR_NOT_NULL(marie_dev1);
 	linphone_audio_device_ref(marie_dev1);
 
 	// device dummy_playback in the list
-	dev_found = bctbx_list_find_custom(marie_audio_devices, (bctbx_compare_func)audio_device_name_match,
-	                                   DUMMY_PLAYBACK_TEST_SOUNDCARD);
+	dev_found =
+	    bctbx_list_find_custom(marie_audio_devices, (bctbx_compare_func)liblinphone_tester_audio_device_name_match,
+	                           DUMMY_PLAYBACK_TEST_SOUNDCARD);
 	BC_ASSERT_PTR_NOT_NULL(dev_found);
 	LinphoneAudioDevice *marie_playback = (dev_found) ? (LinphoneAudioDevice *)bctbx_list_get_data(dev_found) : NULL;
 	BC_ASSERT_PTR_NOT_NULL(marie_playback);
 	linphone_audio_device_ref(marie_playback);
 
 	// device dummy_capture in the list
-	dev_found = bctbx_list_find_custom(marie_audio_devices, (bctbx_compare_func)audio_device_name_match,
-	                                   DUMMY_CAPTURE_TEST_SOUNDCARD);
+	dev_found =
+	    bctbx_list_find_custom(marie_audio_devices, (bctbx_compare_func)liblinphone_tester_audio_device_name_match,
+	                           DUMMY_CAPTURE_TEST_SOUNDCARD);
 	BC_ASSERT_PTR_NOT_NULL(dev_found);
 	LinphoneAudioDevice *marie_capture = (dev_found) ? (LinphoneAudioDevice *)bctbx_list_get_data(dev_found) : NULL;
 	BC_ASSERT_PTR_NOT_NULL(marie_capture);
@@ -2077,32 +2271,34 @@ static void conference_with_simple_audio_device_change(void) {
 
 	// As new devices are prepended, they can be easily accessed and we do not run the risk of gettting a device whose
 	// type is Unknown 1st device
-	dev_found =
-	    bctbx_list_find_custom(laure_audio_devices, (bctbx_compare_func)audio_device_name_match, DUMMY2_TEST_SOUNDCARD);
+	dev_found = bctbx_list_find_custom(
+	    laure_audio_devices, (bctbx_compare_func)liblinphone_tester_audio_device_name_match, DUMMY2_TEST_SOUNDCARD);
 	BC_ASSERT_PTR_NOT_NULL(dev_found);
 	LinphoneAudioDevice *laure_dev0 = (dev_found) ? (LinphoneAudioDevice *)bctbx_list_get_data(dev_found) : NULL;
 	BC_ASSERT_PTR_NOT_NULL(laure_dev0);
 	linphone_audio_device_ref(laure_dev0);
 
 	// 2nd device
-	dev_found =
-	    bctbx_list_find_custom(laure_audio_devices, (bctbx_compare_func)audio_device_name_match, DUMMY_TEST_SOUNDCARD);
+	dev_found = bctbx_list_find_custom(
+	    laure_audio_devices, (bctbx_compare_func)liblinphone_tester_audio_device_name_match, DUMMY_TEST_SOUNDCARD);
 	BC_ASSERT_PTR_NOT_NULL(dev_found);
 	LinphoneAudioDevice *laure_dev1 = (dev_found) ? (LinphoneAudioDevice *)bctbx_list_get_data(dev_found) : NULL;
 	BC_ASSERT_PTR_NOT_NULL(laure_dev1);
 	linphone_audio_device_ref(laure_dev1);
 
 	// device dummy_playback in the list
-	dev_found = bctbx_list_find_custom(laure_audio_devices, (bctbx_compare_func)audio_device_name_match,
-	                                   DUMMY_PLAYBACK_TEST_SOUNDCARD);
+	dev_found =
+	    bctbx_list_find_custom(laure_audio_devices, (bctbx_compare_func)liblinphone_tester_audio_device_name_match,
+	                           DUMMY_PLAYBACK_TEST_SOUNDCARD);
 	BC_ASSERT_PTR_NOT_NULL(dev_found);
 	LinphoneAudioDevice *laure_playback = (dev_found) ? (LinphoneAudioDevice *)bctbx_list_get_data(dev_found) : NULL;
 	BC_ASSERT_PTR_NOT_NULL(laure_playback);
 	linphone_audio_device_ref(laure_playback);
 
 	// device dummy_capture in the list
-	dev_found = bctbx_list_find_custom(laure_audio_devices, (bctbx_compare_func)audio_device_name_match,
-	                                   DUMMY_CAPTURE_TEST_SOUNDCARD);
+	dev_found =
+	    bctbx_list_find_custom(laure_audio_devices, (bctbx_compare_func)liblinphone_tester_audio_device_name_match,
+	                           DUMMY_CAPTURE_TEST_SOUNDCARD);
 	BC_ASSERT_PTR_NOT_NULL(dev_found);
 	LinphoneAudioDevice *laure_capture = (dev_found) ? (LinphoneAudioDevice *)bctbx_list_get_data(dev_found) : NULL;
 	BC_ASSERT_PTR_NOT_NULL(laure_capture);
@@ -2154,11 +2350,15 @@ static void conference_with_simple_audio_device_change(void) {
 
 		idx++;
 
-		BC_ASSERT_TRUE(wait_for_until(m->lc, laure->lc, &m->stat.number_of_LinphoneCallConnected, 1, 5000));
-		BC_ASSERT_TRUE(wait_for_until(m->lc, laure->lc, &m->stat.number_of_LinphoneCallStreamsRunning, 1, 5000));
+		BC_ASSERT_TRUE(wait_for_until(m->lc, laure->lc, &m->stat.number_of_LinphoneCallConnected, 1,
+		                              liblinphone_tester_sip_timeout));
+		BC_ASSERT_TRUE(wait_for_until(m->lc, laure->lc, &m->stat.number_of_LinphoneCallStreamsRunning, 1,
+		                              liblinphone_tester_sip_timeout));
 
-		BC_ASSERT_TRUE(wait_for_until(m->lc, laure->lc, &laure->stat.number_of_LinphoneCallConnected, idx, 5000));
-		BC_ASSERT_TRUE(wait_for_until(m->lc, laure->lc, &laure->stat.number_of_LinphoneCallStreamsRunning, idx, 5000));
+		BC_ASSERT_TRUE(wait_for_until(m->lc, laure->lc, &laure->stat.number_of_LinphoneCallConnected, idx,
+		                              liblinphone_tester_sip_timeout));
+		BC_ASSERT_TRUE(wait_for_until(m->lc, laure->lc, &laure->stat.number_of_LinphoneCallStreamsRunning, idx,
+		                              liblinphone_tester_sip_timeout));
 
 		prev_mgr = m;
 	}
@@ -2270,7 +2470,7 @@ static void conference_with_simple_audio_device_change(void) {
 	BC_ASSERT_PTR_EQUAL(linphone_core_get_output_audio_device(marie->lc), marie_current_dev);
 	BC_ASSERT_PTR_EQUAL(linphone_core_get_output_audio_device(laure->lc), laure_current_dev);
 
-	terminate_conference(participants, laure, conf, NULL);
+	terminate_conference(participants, laure, conf, NULL, FALSE);
 
 	bctbx_list_free(lcs);
 	bctbx_list_free(participants);
@@ -2437,11 +2637,15 @@ static void simple_conference_with_audio_device_change_using_public_api(void) {
 
 		idx++;
 
-		BC_ASSERT_TRUE(wait_for_until(m->lc, marie->lc, &m->stat.number_of_LinphoneCallConnected, 1, 5000));
-		BC_ASSERT_TRUE(wait_for_until(m->lc, marie->lc, &m->stat.number_of_LinphoneCallStreamsRunning, 1, 5000));
+		BC_ASSERT_TRUE(wait_for_until(m->lc, marie->lc, &m->stat.number_of_LinphoneCallConnected, 1,
+		                              liblinphone_tester_sip_timeout));
+		BC_ASSERT_TRUE(wait_for_until(m->lc, marie->lc, &m->stat.number_of_LinphoneCallStreamsRunning, 1,
+		                              liblinphone_tester_sip_timeout));
 
-		BC_ASSERT_TRUE(wait_for_until(m->lc, marie->lc, &marie->stat.number_of_LinphoneCallConnected, idx, 5000));
-		BC_ASSERT_TRUE(wait_for_until(m->lc, marie->lc, &marie->stat.number_of_LinphoneCallStreamsRunning, idx, 5000));
+		BC_ASSERT_TRUE(wait_for_until(m->lc, marie->lc, &marie->stat.number_of_LinphoneCallConnected, idx,
+		                              liblinphone_tester_sip_timeout));
+		BC_ASSERT_TRUE(wait_for_until(m->lc, marie->lc, &marie->stat.number_of_LinphoneCallStreamsRunning, idx,
+		                              liblinphone_tester_sip_timeout));
 
 		prev_mgr = m;
 	}
@@ -2468,7 +2672,7 @@ static void simple_conference_with_audio_device_change_using_public_api(void) {
 	BC_ASSERT_EQUAL(marie->stat.number_of_LinphoneCoreAudioDeviceChanged, (noDevChanges + 2), int, "%d");
 	BC_ASSERT_PTR_EQUAL(linphone_conference_get_input_audio_device(conf), current_dev);
 
-	terminate_conference(participants, marie, conf, NULL);
+	terminate_conference(participants, marie, conf, NULL, TRUE);
 
 	bctbx_list_free(lcs);
 	bctbx_list_free(participants);
@@ -2486,6 +2690,7 @@ static void simple_conference_with_audio_device_change_using_public_api(void) {
 
 test_t audio_routes_tests[] = {
     TEST_NO_TAG("Simple call with audio devices reload", simple_call_with_audio_devices_reload),
+    TEST_ONE_TAG("Simple call with real audio devices reload", simple_call_with_real_audio_devices_reload, "skip"),
     TEST_NO_TAG("Call with disconnecting device before ringback", call_with_disconnecting_device_before_ringback),
     TEST_NO_TAG("Call with disconnecting device during ringback", call_with_disconnecting_device_during_ringback),
     TEST_NO_TAG("Call with disconnecting device after ringback", call_with_disconnecting_device_after_ringback),
@@ -2510,6 +2715,7 @@ test_t audio_routes_tests[] = {
                 simple_call_with_audio_device_change_during_call_pause_caller),
     TEST_NO_TAG("Simple call with audio device change during call pause both parties",
                 simple_call_with_audio_device_change_during_call_pause_caller_callee),
+    TEST_NO_TAG("Simple call with a device without sound card", simple_call_without_sound_card),
     TEST_NO_TAG("Conference with simple audio device change", conference_with_simple_audio_device_change),
     TEST_NO_TAG("Simple conference with audio device change using public API",
                 simple_conference_with_audio_device_change_using_public_api),

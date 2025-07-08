@@ -45,11 +45,11 @@ class ConferenceParamsInterface;
  * This interface allow an application to manage a multimedia conference. Implementation follows 2 mains rfc4579 ( SIP
  *Call Control - Conferencing for User Agents) and rfc4575 ( A Session Initiation Protocol (SIP) Event Package for
  *Conference State). It can be  either a Focus user agent (I.E local conference) or belong to a remote focus user agent
- *(I.E remote conference). <br>
+ *(I.E client conference). <br>
  *
  *	<br>
  * 	Conference is instanciated with ConferenceParams and list of initial participants. ConferenceParams allows to choose
- *beetween local or remote conference, and to set initial parameters. A conference is created either by the focus or
+ *beetween local or client conference, and to set initial parameters. A conference is created either by the focus or
  *with a remote focus. <br>
  */
 class LINPHONE_PUBLIC ConferenceInterface {
@@ -111,26 +111,13 @@ public:
 	 Get the conference ID of this conference.
 	 @return The Address of the conference.
 	 **/
-	virtual const std::shared_ptr<Address> &getConferenceAddress() const = 0;
-
-	/*
-	 * Get the subject of this conference
-	 * @return The subject of the chat room
-	 */
-	virtual const std::string &getSubject() const = 0;
+	virtual std::shared_ptr<Address> getConferenceAddress() const = 0;
 
 	/*
 	 * Get the subject of this conference
 	 * @return The subject of the chat room in UTF8
 	 */
 	virtual const std::string &getUtf8Subject() const = 0;
-
-	/*
-	 * Set the subject of this conference. If not focus,  this operation is only available if the local participant
-	 * #getMe() is admin.
-	 * @param[in] subject The new subject to set for the chat room
-	 */
-	virtual void setSubject(const std::string &subject) = 0;
 
 	/*
 	 * Set the subject of this conference in UTF8. If not focus,  this operation is only available if the local
@@ -161,7 +148,7 @@ public:
 	 <br>
 	 @param[in] participantAddress The address of the participant to add to this Conference.
 	*/
-	virtual bool addParticipant(const std::shared_ptr<const Address> &participantAddress) = 0;
+	virtual bool addParticipant(const std::shared_ptr<Address> &participantAddress) = 0;
 
 	/*
 	 * Same as function addParticipant(const std::shared_ptr<Address> &participantAddress), except that call to add is
@@ -184,7 +171,7 @@ public:
 	 * @param[in] addresses
 	 * @return True if everything is OK, False otherwise
 	 */
-	virtual bool addParticipants(const std::list<std::shared_ptr<const Address>> &addresses) = 0;
+	virtual bool addParticipants(const std::list<std::shared_ptr<Address>> &addresses) = 0;
 
 	/*
 	 * Add local participant to this conference, this fonction is only available for local focus. Behavior is the same
@@ -216,7 +203,7 @@ public:
 	 * Get the list of participant devices in this conference including ourself if in conference.
 	 * @return \std::list<std::shared_ptr<ParticipantDevice>>
 	 */
-	virtual const std::list<std::shared_ptr<ParticipantDevice>> getParticipantDevices(bool includeMe = true) const = 0;
+	virtual std::list<std::shared_ptr<ParticipantDevice>> getParticipantDevices(bool includeMe = true) const = 0;
 
 	/*
 	* Get the participant representing myself in this Conference (I.E local participant).<br>
@@ -226,7 +213,7 @@ public:
 	<b>Remote focus case: </b><br>
 	*Local participant is the Participant of this conference used as From when operations are performed like subject
 	change or participant management. local participant is not included in the of participant returned by function.
-	Local participant is mandatory to create a remote conference conference.
+	Local participant is mandatory to create a client conference conference.
 	* @return The participant representing myself in the conference.
 	*/
 	virtual std::shared_ptr<Participant> getMe() const = 0;
@@ -290,6 +277,13 @@ public:
 	 * This fonction is called each time a full state notification is receied from the focus.
 	 */
 	virtual void onFullStateReceived() {
+	}
+
+	/*
+	 * This fonction is called each time the list of allowed participant is changed while the conference is active
+	 * @param[in] event informations related to the change of the participant allowed to join the conference. @notnil
+	 */
+	virtual void onAllowedParticipantListChanged(BCTBX_UNUSED(const std::shared_ptr<ConferenceNotifiedEvent> &event)) {
 	}
 
 	/*
@@ -435,6 +429,17 @@ public:
 	virtual void
 	onParticipantDeviceRemoved(BCTBX_UNUSED(const std::shared_ptr<ConferenceParticipantDeviceEvent> &event),
 	                           BCTBX_UNUSED(const std::shared_ptr<ParticipantDevice> &device)) {
+	}
+
+	/*
+	 * This fonction is called each time a new participant device that is not in the allowed participants'list calls a
+	 * closed-list conference
+	 * @param[in] event informations related to the removed device's participant. @notnil
+	 * @param[in] device participant device that is not in the allowed participants'list. @notnil
+	 */
+	virtual void
+	onParticipantDeviceJoiningRequest(BCTBX_UNUSED(const std::shared_ptr<ConferenceParticipantDeviceEvent> &event),
+	                                  BCTBX_UNUSED(const std::shared_ptr<ParticipantDevice> &device)) {
 	}
 
 	/*

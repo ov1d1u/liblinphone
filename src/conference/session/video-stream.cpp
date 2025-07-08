@@ -388,7 +388,7 @@ void MS2VideoStream::render(const OfferAnswerContext &ctx, CallSession::State ta
 				lInfo() << "MS2Videostream::render End2End encrypted local conference";
 				setEktMode(MS_EKT_TRANSFER);
 			} else {
-				lInfo() << "MS2Videostream::render End2End encrypted remote conference";
+				lInfo() << "MS2Videostream::render End2End encrypted client conference";
 				setEktMode(MS_EKT_ENABLED);
 			}
 		}
@@ -398,7 +398,7 @@ void MS2VideoStream::render(const OfferAnswerContext &ctx, CallSession::State ta
 	bool localScreenSharingChanged = false, displayModeChanged = false;
 	auto participantDevice = getMediaSession().getParticipantDevice(LinphoneStreamTypeVideo, label);
 	if (!participantDevice) {
-		if (conference) {
+		if (conference && conference->getMe()) {
 			participantDevice = conference->getMe()->findDevice(LinphoneStreamTypeVideo, label, false);
 			// is Me. Q : Me is always local? (multi account)
 			isScreenSharing = (participantDevice && participantDevice->screenSharingEnabled());
@@ -418,7 +418,7 @@ void MS2VideoStream::render(const OfferAnswerContext &ctx, CallSession::State ta
 						}
 					}
 				} else { // Get Thumbnail Stream.
-					int idx = getMediaSession().getLocalThumbnailStreamIdx();
+					int idx = getMediaSession().getThumbnailStreamIdx();
 					if (idx >= 0) auxStream = dynamic_cast<MS2VideoStream *>(getGroup().getStream(idx));
 					localScreenSharingChanged = enableLocalScreenSharing(isScreenSharing);
 				}
@@ -751,7 +751,7 @@ void MS2VideoStream::render(const OfferAnswerContext &ctx, CallSession::State ta
 						link_video_stream_with_itc_sink(mStream);
 						// Current stream is Main, search for the thumbnail to connect with ITC.
 						MS2VideoStream *vs = nullptr;
-						int idx = getMediaSession().getLocalThumbnailStreamIdx();
+						int idx = getMediaSession().getThumbnailStreamIdx();
 						if (idx >= 0) vs = dynamic_cast<MS2VideoStream *>(getGroup().getStream(idx));
 						if (vs) {
 							VideoStream *itcStream = vs->getVideoStream();
@@ -819,7 +819,7 @@ void MS2VideoStream::stop() {
 	 * later use, keeping the sessions (for RTP, SRTP, ZRTP etc) that were setup at the beginning. */
 	mStream = video_stream_new_with_sessions(getCCore()->factory, &mSessions);
 
-	getMediaSessionPrivate().getCurrentParams()->getPrivate()->setUsedVideoCodec(nullptr);
+	if (isMain()) getMediaSessionPrivate().getCurrentParams()->getPrivate()->setUsedVideoCodec(nullptr);
 }
 
 void MS2VideoStream::handleEvent(const OrtpEvent *ev) {

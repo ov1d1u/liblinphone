@@ -107,18 +107,24 @@ MS2Stream::MS2Stream(StreamsGroup &sg, const OfferAnswerContext &params)
 	mStunAllowed = !!linphone_config_get_int(linphone_core_get_config(sg.getCCore()), "rtp", "stun_keepalives", 1);
 }
 
-void MS2Stream::setEkt(const MSEKTParametersSet *ekt_params) const {
+void MS2Stream::setEkt(const MSEKTParametersSet *ekt_params) {
 	MediaStream *ms = getMediaStream();
 	if (ms) {
 		ms_media_stream_sessions_set_ekt(&ms->sessions, ekt_params);
+		// ms_media_stream_sessions_set_ekt may create an SRTP context that must be added to the sessions held by the
+		// stream to be freed if the call ends at an early stage
+		media_stream_reclaim_sessions(ms, &mSessions);
 	}
 }
 
-void MS2Stream::setEktMode(MSEKTMode ekt_mode) const {
+void MS2Stream::setEktMode(MSEKTMode ekt_mode) {
 	MediaStream *ms = getMediaStream();
 	if (ms) {
 		ms_media_stream_sessions_set_ekt_mode(&ms->sessions, ekt_mode);
 		if (ekt_mode == MS_EKT_TRANSFER) rtp_session_enable_transfer_mode(ms->sessions.rtp_session, TRUE);
+		// ms_media_stream_sessions_set_ekt_mode may create an SRTP context that must be added to the sessions held by
+		// the stream to be freed if the call ends at an early stage
+		media_stream_reclaim_sessions(ms, &mSessions);
 	}
 }
 
@@ -282,8 +288,8 @@ void MS2Stream::fillLocalMediaDescription(OfferAnswerContext &ctx) {
 		localDesc.setBundleOnly(TRUE);
 	}
 
-	localDesc.cfgs[localDesc.getChosenConfigurationIndex()].rtp_ssrc =
-	    mSessions.rtp_session ? rtp_session_get_send_ssrc(mSessions.rtp_session) : 0;
+	auto rtp_ssrc = mSessions.rtp_session ? rtp_session_get_send_ssrc(mSessions.rtp_session) : 0;
+	localDesc.cfgs[localDesc.getChosenConfigurationIndex()].rtp_ssrc = rtp_ssrc;
 
 	std::shared_ptr<Address> address = nullptr;
 	if (getMediaSessionPrivate().getOp()) {
@@ -298,12 +304,16 @@ void MS2Stream::fillLocalMediaDescription(OfferAnswerContext &ctx) {
 	// Search in the DB if this is a call toward a conference URI
 	auto &mainDb = getCore().getPrivate()->mainDb;
 	if (mainDb) {
-		confInfo = mainDb->getConferenceInfoFromURI(getMediaSession().getRemoteAddress());
+		auto &session = getMediaSession();
+		auto conferenceAddress = getMediaSessionPrivate().getParams()->getPrivate()->getInConference()
+		                             ? session.getLocalAddress()
+		                             : session.getRemoteAddress();
+		confInfo = mainDb->getConferenceInfoFromURI(conferenceAddress);
 	}
 #endif // HAVE_DB_STORAGE
-	if ((address && address->hasParam("isfocus")) || confInfo)
-		localDesc.cfgs[localDesc.getChosenConfigurationIndex()].conference_ssrc =
-		    mSessions.rtp_session ? rtp_session_get_send_ssrc(mSessions.rtp_session) : 0;
+	if ((address && address->hasParam(Conference::IsFocusParameter)) || confInfo) {
+		localDesc.cfgs[localDesc.getChosenConfigurationIndex()].conference_ssrc = rtp_ssrc;
+	}
 
 	// The negotiated encryption must remain unchanged if:
 	// - internal update
@@ -522,6 +532,8 @@ void MS2Stream::configureRtpSessionForRtcpFb(const OfferAnswerContext &params) {
 	                                !!resultStreamDesc.getChosenConfiguration().rtcp_fb.generic_nack_enabled);
 	rtp_session_enable_avpf_feature(mSessions.rtp_session, ORTP_AVPF_FEATURE_TMMBR,
 	                                !!resultStreamDesc.getChosenConfiguration().rtcp_fb.tmmbr_enabled);
+	rtp_session_enable_avpf_feature(mSessions.rtp_session, ORTP_AVPF_FEATURE_GOOG_REMB,
+	                                !!resultStreamDesc.getChosenConfiguration().rtcp_fb.goog_remb_enabled);
 }
 
 void MS2Stream::configureRtpSessionForRtcpXr(const OfferAnswerContext &params) {
@@ -556,16 +568,24 @@ void MS2Stream::configureAdaptiveRateControl(const OfferAnswerContext &params) {
 		media_stream_enable_adaptive_bitrate_control(ms, false);
 		return;
 	}
+
 	bool isAdvanced = true;
 	string algo = linphone_core_get_adaptive_rate_algorithm(getCCore());
 	if (algo == "basic") isAdvanced = false;
 	else if (algo == "advanced") isAdvanced = true;
 
-	if (isAdvanced && !params.getResultStreamDescription().getChosenConfiguration().rtcp_fb.tmmbr_enabled) {
-		lWarning() << "Advanced adaptive rate control requested but avpf-tmmbr is not activated in this stream. "
+	// Check for goog-remb in any stream. If we find one, we add all streams in the bandwith controller
+	const auto &stream = params.resultMediaDescription->findStreamWithSdpAttribute({make_pair("goog-remb", "")});
+	const bool googRembEnabled = stream != Utils::getEmptyConstRefObject<SalStreamDescription>();
+
+	if (isAdvanced &&
+	    !(params.getResultStreamDescription().getChosenConfiguration().rtcp_fb.tmmbr_enabled || googRembEnabled)) {
+		lWarning() << "Advanced adaptive rate control requested but neither avpf-tmmbr nor goog-remb is activated "
+		              "in this stream. "
 		              "Reverting to basic rate control instead";
 		isAdvanced = false;
 	}
+
 	if (isAdvanced) {
 		lInfo() << "Setting up advanced rate control";
 		if (getMixer() == nullptr) {
@@ -626,13 +646,36 @@ void MS2Stream::getRtpDestination(const OfferAnswerContext &params, RtpAddressIn
 	        ? params.resultMediaDescription->getStreamAtIdx(static_cast<unsigned int>(mBundleOwner->getIndex()))
 	        : params.getResultStreamDescription();
 
-	info->rtpAddr = stream.rtp_addr.empty() == false ? stream.rtp_addr : params.resultMediaDescription->addr;
-	bool isMulticast = !!ms_is_multicast(info->rtpAddr.c_str());
-	info->rtpPort = stream.rtp_port;
-	info->rtcpAddr = stream.rtcp_addr.empty() == false ? stream.rtcp_addr : info->rtpAddr;
-	info->rtcpPort = (linphone_core_rtcp_enabled(getCCore()) && !isMulticast)
-	                     ? (stream.rtcp_port ? stream.rtcp_port : stream.rtp_port + 1)
-	                     : 0;
+	const auto &remoteStream =
+	    (mRtpBundle && !mOwnsBundle && mBundleOwner)
+	        ? params.remoteMediaDescription->getStreamAtIdx(static_cast<unsigned int>(mBundleOwner->getIndex()))
+	        : params.getRemoteStreamDescription();
+
+	// Work-around for WebRTC as it does not send remote candidates when it should.
+	// So in this case, re-use the IP and port already used by ICE.
+	if (!params.localIsOfferer && getIceService().isActive() && getIceService().hasCompleted() &&
+	    remoteStream.ice_remote_candidates.empty()) {
+		const auto *session =
+		    (mRtpBundle && !mOwnsBundle && mBundleOwner) ? mBundleOwner->mSessions.rtp_session : mSessions.rtp_session;
+
+		char rtpAddr[64] = {};
+		bctbx_sockaddr_to_ip_address((struct sockaddr *)&session->rtp.gs.rem_addr, session->rtp.gs.rem_addrlen, rtpAddr,
+		                             sizeof(rtpAddr), &info->rtpPort);
+		info->rtpAddr = string(rtpAddr);
+
+		char rtcpAddr[64] = {};
+		bctbx_sockaddr_to_ip_address((struct sockaddr *)&session->rtcp.gs.rem_addr, session->rtcp.gs.rem_addrlen,
+		                             rtcpAddr, sizeof(rtcpAddr), &info->rtcpPort);
+		info->rtcpAddr = string(rtcpAddr);
+	} else {
+		info->rtpAddr = stream.rtp_addr.empty() == false ? stream.rtp_addr : params.resultMediaDescription->addr;
+		bool isMulticast = !!ms_is_multicast(info->rtpAddr.c_str());
+		info->rtpPort = stream.rtp_port;
+		info->rtcpAddr = stream.rtcp_addr.empty() == false ? stream.rtcp_addr : info->rtpAddr;
+		info->rtcpPort = (linphone_core_rtcp_enabled(getCCore()) && !isMulticast)
+		                     ? (stream.rtcp_port ? stream.rtcp_port : stream.rtp_port + 1)
+		                     : 0;
+	}
 }
 
 /*
@@ -1085,14 +1128,14 @@ void MS2Stream::updateDestinations(const OfferAnswerContext &params) {
 		return;
 	}
 
-	std::string rtpAddr =
-	    (resultStreamDesc.rtp_addr.empty() == false) ? resultStreamDesc.rtp_addr : params.resultMediaDescription->addr;
-	std::string rtcpAddr = (resultStreamDesc.rtcp_addr.empty() == false) ? resultStreamDesc.rtcp_addr
-	                                                                     : params.resultMediaDescription->addr;
-	lInfo() << "Change audio stream destination: RTP=" << rtpAddr << ":" << resultStreamDesc.rtp_port
-	        << " RTCP=" << rtcpAddr << ":" << resultStreamDesc.rtcp_port;
-	rtp_session_set_remote_addr_full(mSessions.rtp_session, rtpAddr.c_str(), resultStreamDesc.rtp_port,
-	                                 rtcpAddr.c_str(), resultStreamDesc.rtcp_port);
+	RtpAddressInfo info;
+	getRtpDestination(params, &info);
+
+	lInfo() << "Change audio stream destination: RTP=" << info.rtpAddr << ":" << info.rtpPort
+	        << " RTCP=" << info.rtcpAddr << ":" << info.rtcpPort;
+
+	rtp_session_set_remote_addr_full(mSessions.rtp_session, info.rtpAddr.c_str(), info.rtpPort, info.rtcpAddr.c_str(),
+	                                 info.rtcpPort);
 }
 
 bool MS2Stream::updateRtpProfile(const OfferAnswerContext &params) {
@@ -1670,6 +1713,13 @@ void MS2Stream::finish() {
 	if (mRtpBundle && mOwnsBundle) {
 		rtp_bundle_delete(mRtpBundle);
 		mRtpBundle = nullptr;
+
+		// Also remove bundle from auxiliary sessions if any
+		if (mSessions.auxiliary_sessions != nullptr) {
+			for (const bctbx_list_t *it = mSessions.auxiliary_sessions; it != nullptr; it = it->next) {
+				static_cast<RtpSession *>(it->data)->bundle = nullptr;
+			}
+		}
 	}
 	if (mOrtpEvQueue) {
 		rtp_session_unregister_event_queue(mSessions.rtp_session, mOrtpEvQueue);

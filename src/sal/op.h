@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010-2022 Belledonne Communications SARL.
+ * Copyright (c) 2010-2025 Belledonne Communications SARL.
  *
  * This file is part of Liblinphone
  * (see https://gitlab.linphone.org/BC/public/liblinphone).
@@ -239,6 +239,8 @@ public:
 	int sendInfo(const SalBodyHandler *bodyHandler);
 
 	int replyMessage(SalReason reason);
+	int
+	replyWithErrorInfo(const SalErrorInfo *info, const SalAddress *redirectionAddr = nullptr, const time_t expire = 0);
 	/* Set a function to be called whenever an operation encouters a "491 request pending" response.
 	 * The function shall retry the operation, based on the new context. */
 	void setRetryFunction(const std::function<void()> &retryFunc);
@@ -251,6 +253,8 @@ public:
 	belle_sip_dialog_t *getDialog() const {
 		return mDialog;
 	}
+
+	void makeSupportedHeader(const std::list<std::string> &supportedTags);
 
 protected:
 	enum class State {
@@ -338,6 +342,8 @@ protected:
 	static void assignAddress(SalAddress **address, std::string &addressStr, const SalAddress *value);
 	static void addInitialRouteSet(belle_sip_request_t *request, const std::list<SalAddress *> &routeAddresses);
 
+	static belle_sip_header_reason_t *makeReasonHeader(const SalErrorInfo *info);
+
 	// SalOpBase
 	Sal *mRoot = nullptr;
 	std::string mRoute; // Or request-uri for REGISTER
@@ -365,6 +371,7 @@ protected:
 	std::string mEntityTag; // As defined by rfc3903 (I.E publih)
 	std::string mChannelBankIdentifier;
 	ReleaseCb mReleaseCb = nullptr;
+	belle_sip_header_t *mSupportedHeader = nullptr;
 
 	const belle_sip_listener_callbacks_t *mCallbacks = nullptr;
 	SalErrorInfo mErrorInfo;
@@ -399,6 +406,7 @@ protected:
 	bool mSupportsSessionTimers = false;
 	bool mOpReleased = false;
 	bool mOwnsDialog = true;
+	bool mUseSupportedTags = false;
 
 	friend class Sal;
 	friend class Call;

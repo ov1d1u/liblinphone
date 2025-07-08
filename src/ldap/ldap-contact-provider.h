@@ -36,8 +36,8 @@
 
 #include "../search/magic-search.h"
 #include "../search/search-request.h"
-#include "ldap.h" // Linphone
-#include <ldap.h> // OpenLDAP
+#include "ldap-params.h" // Linphone
+#include <ldap.h>        // OpenLDAP
 
 LINPHONE_BEGIN_NAMESPACE
 
@@ -70,19 +70,9 @@ public:
 	 * @param ldap The LDAP server to use from linphone_core_get_ldap_list()
 	 */
 
-	LdapContactProvider(const std::shared_ptr<Core> &core, std::shared_ptr<Ldap> ldap, int maxResults);
+	LdapContactProvider(const std::shared_ptr<Core> &core, std::shared_ptr<LdapParams> ldap, int maxResults);
 
 	virtual ~LdapContactProvider();
-
-	/**
-	 * @brief create Create a list of #LdapContactProvider from the core's configuration : The section name is 'ldap'
-	 * and have an additionnal index to separate servers (eg. 'ldap_4'). A section must be enabled with 'enable' to 1 to
-	 * be taken account.
-	 * @param core The Linphone core
-	 * @param maxResults The max results to return
-	 * @return A list of #LdapContactProvider
-	 */
-	static std::vector<std::shared_ptr<LdapContactProvider>> create(const std::shared_ptr<Core> &core, int maxResults);
 
 	/**
 	 * @brief initializeLdap  Call ldap_initialize, set options and start TLS if needed.
@@ -113,7 +103,7 @@ public:
 	 * @brief getLdapServer Get the LDAP server that is coming from core
 	 * @return The LDAP server. Return nullptr if not set.
 	 */
-	std::shared_ptr<Ldap> getLdapServer();
+	std::shared_ptr<LdapParams> getLdapServer();
 
 	//	SEARCH
 	/**
@@ -121,15 +111,14 @@ public:
 	 * This function is thread-safe.
 	 * @param predicate A value to be used to replace a format specifier in the format string : 'filter' configuration
 	 * key. This key is a string that contains a format string that follows the same specifications as format in printf.
-	 * @param cb The callback where to get results in the form of 'static void resultsCb( LinphoneContactSearch* id,
-	 * bctbx_list_t* searchResults, void* data );'
+	 * @param cb The callback where to get results in the form of #MagicSearchCallback.
 	 * @param cbData The data to pass to the callback
 	 * @param requestHistory The list of search that have been requested. It is used to make a delay between the same
 	 * kind of searchs.
 	 * @return true if the request can be processed.
 	 */
 	bool search(const std::string &predicate,
-	            ContactSearchCallback cb,
+	            MagicSearchCallback cb,
 	            void *cbData,
 	            const std::list<SearchRequest> &requestHistory = std::list<SearchRequest>());
 
@@ -207,8 +196,14 @@ private:
 	 */
 	void fallbackToNextServerUrl();
 
+	/*
+	 * Randomness provider, required by openLDAP's mbedtls TLS implementation.
+	 */
+	static int randomProvider(void *buffer, int bytes);
+
 	std::shared_ptr<Core> mCore;
-	std::shared_ptr<Ldap> mLdapServer; // The LDAP server coming from core if set. Useful to know what server is using.
+	std::shared_ptr<LdapParams>
+	    mLdapServer; // The LDAP server coming from core if set. Useful to know what server is using.
 	std::map<std::string, std::vector<std::string>> mConfig;
 	LDAP *mLd;
 	std::list<std::shared_ptr<LdapContactSearch>> mRequests;

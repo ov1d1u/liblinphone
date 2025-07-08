@@ -20,6 +20,7 @@
 
 #include "bctoolbox/defs.h"
 
+#include "linphone/types.h"
 #include "mediastreamer2/msanalysedisplay.h"
 #include "mediastreamer2/msmediaplayer.h"
 #include "mediastreamer2/msmire.h"
@@ -356,10 +357,10 @@ _request_video(LinphoneCoreManager *caller, LinphoneCoreManager *callee, bool_t 
 }
 
 /*
- * This function requests the addon of a video stream, initiated by "callee" and potentiall accepted by "caller",
+ * This function requests the addon of a video stream, initiated by "callee" and potentially accepted by "caller",
  * and asserts a number of things after this is done.
  * However the video addon may fail due to video policy, so that there is no insurance that video is actually added.
- * This function returns TRUE if video was succesfully added, FALSE otherwise or if video is already there.
+ * This function returns TRUE if video was successfully added, FALSE otherwise or if video is already there.
  **/
 bool_t request_video(LinphoneCoreManager *caller, LinphoneCoreManager *callee, bool_t accept_with_params) {
 	stats initial_caller_stat = caller->stat;
@@ -2721,7 +2722,19 @@ static void video_call_with_auto_video_accept_disabled_on_one_end(void) {
 	linphone_core_manager_destroy(pauline);
 }
 
-static void asymmetrical_video_call(bool_t with_call_params) {
+static void enable_rtp_bundle(LinphoneCore *lc, bool_t enable) {
+
+	if (enable == false) {
+		linphone_config_set_bool(linphone_core_get_config(lc), "rtp", "accept_bundle", FALSE);
+	}
+	LinphoneAccount *account = linphone_core_get_default_account(lc);
+	LinphoneAccountParams *account_params = linphone_account_params_clone(linphone_account_get_params(account));
+	linphone_account_params_enable_rtp_bundle(account_params, enable);
+	linphone_account_set_params(account, account_params);
+	linphone_account_params_unref(account_params);
+}
+
+static void asymmetrical_video_call(bool_t with_call_params, bool_t with_flexfec) {
 	LinphoneCoreManager *marie = linphone_core_manager_new("marie_rc");
 	LinphoneCoreManager *pauline =
 	    linphone_core_manager_new(transport_supported(LinphoneTransportTcp) ? "pauline_rc" : "pauline_tcp_rc");
@@ -2730,6 +2743,28 @@ static void asymmetrical_video_call(bool_t with_call_params) {
 	if (g_display_filter != "") {
 		linphone_core_set_video_display_filter(marie->lc, g_display_filter.c_str());
 		linphone_core_set_video_display_filter(pauline->lc, g_display_filter.c_str());
+	}
+
+	// enable flexfec
+	if (with_flexfec) {
+		OrtpNetworkSimulatorParams network_params = {0};
+		network_params.enabled = TRUE;
+		network_params.loss_rate = 8.f;
+		network_params.mode = OrtpNetworkSimulatorOutbound;
+		linphone_core_set_network_simulator_params(marie->lc, &network_params);
+		linphone_core_set_network_simulator_params(pauline->lc, &network_params);
+		enable_rtp_bundle(marie->lc, TRUE);
+		enable_rtp_bundle(pauline->lc, TRUE);
+		linphone_core_enable_fec(marie->lc, TRUE);
+		linphone_core_enable_fec(pauline->lc, TRUE);
+		disable_all_video_codecs_except_one(marie->lc, "VP8");
+		disable_all_video_codecs_except_one(pauline->lc, "VP8");
+		linphone_core_set_video_device(marie->lc, liblinphone_tester_mire_id);
+		linphone_core_set_video_device(pauline->lc, liblinphone_tester_mire_id);
+		linphone_core_enable_video_capture(marie->lc, TRUE);
+		linphone_core_enable_video_capture(pauline->lc, TRUE);
+		linphone_core_enable_video_display(marie->lc, TRUE);
+		linphone_core_enable_video_display(pauline->lc, TRUE);
 	}
 
 	// asymmetrical video policy
@@ -2760,6 +2795,11 @@ static void asymmetrical_video_call(bool_t with_call_params) {
 	BC_ASSERT_PTR_NOT_NULL(pauline_call);
 	LinphoneCall *marie_call = linphone_core_get_current_call(marie->lc);
 	BC_ASSERT_PTR_NOT_NULL(marie_call);
+
+	if (with_flexfec) {
+		BC_ASSERT_TRUE(linphone_call_params_fec_enabled(linphone_call_get_current_params(pauline_call)));
+		BC_ASSERT_TRUE(linphone_call_params_fec_enabled(linphone_call_get_current_params(marie_call)));
+	}
 
 	if (pauline_call && marie_call) {
 		if (!with_call_params) {
@@ -2828,6 +2868,28 @@ static void asymmetrical_video_call(bool_t with_call_params) {
 		                LinphoneMediaDirectionSendRecv, int, "%d");
 		BC_ASSERT_EQUAL(linphone_call_params_get_video_direction(linphone_call_get_remote_params(pauline_call)),
 		                LinphoneMediaDirectionSendRecv, int, "%d");
+
+		if (with_flexfec) {
+			VideoStream *vstream_marie = (VideoStream *)linphone_call_get_stream(marie_call, LinphoneStreamTypeVideo);
+			fec_stats *fec_stats_marie = fec_stream_get_stats(vstream_marie->ms.fec_stream);
+			VideoStream *vstream_pauline =
+			    (VideoStream *)linphone_call_get_stream(pauline_call, LinphoneStreamTypeVideo);
+			fec_stats *fec_stats_pauline = fec_stream_get_stats(vstream_pauline->ms.fec_stream);
+			BC_ASSERT_TRUE(
+			    wait_for_until_for_uint64(marie->lc, pauline->lc, &fec_stats_marie->packets_recovered, 3, 45000));
+			BC_ASSERT_TRUE(
+			    wait_for_until_for_uint64(marie->lc, pauline->lc, &fec_stats_pauline->packets_recovered, 3, 45000));
+			LinphoneCallStats *marie_call_stats = linphone_call_get_video_stats(marie_call);
+			LinphoneCallStats *pauline_call_stats = linphone_call_get_video_stats(pauline_call);
+			int marie_repaired_packets =
+			    static_cast<int>(linphone_call_stats_get_fec_repaired_packets_number(marie_call_stats));
+			int pauline_repaired_packets =
+			    static_cast<int>(linphone_call_stats_get_fec_repaired_packets_number(pauline_call_stats));
+			BC_ASSERT_GREATER_STRICT(marie_repaired_packets, 0, int, "%d");
+			BC_ASSERT_GREATER_STRICT(pauline_repaired_packets, 0, int, "%d");
+			if (marie_call_stats) linphone_call_stats_unref(marie_call_stats);
+			if (pauline_call_stats) linphone_call_stats_unref(pauline_call_stats);
+		}
 
 		linphone_call_params_unref(marie_call_params);
 		linphone_call_params_unref(pauline_call_params);
@@ -3067,11 +3129,15 @@ static void asymmetrical_video_call_2(void) {
 }
 
 static void asymmetrical_video_call_starts_with_video() {
-	asymmetrical_video_call(true);
+	asymmetrical_video_call(true, false);
 }
 
 static void asymmetrical_video_call_starts_without_video() {
-	asymmetrical_video_call(false);
+	asymmetrical_video_call(false, false);
+}
+
+static void asymmetrical_video_call_with_flexfec_starts_with_video() {
+	asymmetrical_video_call(true, true);
 }
 
 static void call_with_early_media_and_no_sdp_in_200_with_video(void) {
@@ -3355,7 +3421,7 @@ static void video_call_with_video_forwarding_base(bool_t forwardee_end_call) {
 	LinphoneCoreManager *marie = linphone_core_manager_new("marie_rc");
 	LinphoneCoreManager *pauline =
 	    linphone_core_manager_new(transport_supported(LinphoneTransportTls) ? "pauline_rc" : "pauline_tcp_rc");
-	LinphoneCoreManager *laure = linphone_core_manager_new("laure_rc_udp");
+	LinphoneCoreManager *laure = linphone_core_manager_new("laure_tcp_rc");
 	int dummy = 0;
 
 	bctbx_list_t *lcs = bctbx_list_append(NULL, marie->lc);
@@ -3825,6 +3891,73 @@ static void call_with_video_requested_and_terminate(void) {
 	linphone_core_manager_destroy(pauline);
 }
 
+static void video_call_memory() {
+	LinphoneCoreManager *marie = linphone_core_manager_new("marie_rc");
+	LinphoneCoreManager *pauline =
+	    linphone_core_manager_new(transport_supported(LinphoneTransportTcp) ? "pauline_rc" : "pauline_tcp_rc");
+
+	bool_t call_ok = TRUE;
+	if (g_display_filter != "") {
+		linphone_core_set_video_display_filter(marie->lc, g_display_filter.c_str());
+		linphone_core_set_video_display_filter(pauline->lc, g_display_filter.c_str());
+	}
+
+	linphone_core_set_video_device(marie->lc, liblinphone_tester_mire_id);
+	linphone_core_set_video_device(pauline->lc, liblinphone_tester_mire_id);
+	linphone_core_use_preview_window(marie->lc, TRUE);
+
+	BC_ASSERT_TRUE((call_ok = call(pauline, marie)));
+
+	uint64_t memory_ref = 0;
+	int excessCount = 0;
+	for (int count = 0; call_ok && count < 50; ++count) {
+		if (count == 3) { // Ignore first allocations to ignore preallocations/caches
+			memory_ref = bc_tester_get_memory_consumption();
+			ms_message("Memory consumption first reference: %lld KB", (long long)memory_ref / 1024);
+		} else if (count > 3) { // Bad if more than 10% of memory
+			auto current_memory = bc_tester_get_memory_consumption();
+			call_ok = current_memory <= 1.1 * memory_ref;
+			if (!call_ok) {
+				ms_warning("Excess memory consumption : %lld KB / %lld KB [count=%d]", (long long)current_memory / 1024,
+				           (long long)memory_ref / 1024, count);
+				if (++excessCount <= 3) { // Let 3 attempts on growing memory.
+					memory_ref = current_memory;
+					call_ok = TRUE;
+				} else {
+					BC_ASSERT_TRUE(current_memory <= 1.1 * memory_ref); // Make assert
+				}
+			}
+		}
+		// Switch on
+		BC_ASSERT_TRUE(request_video(marie, pauline, TRUE));
+		linphone_core_enable_video_preview(marie->lc, TRUE);
+		linphone_core_enable_video_display(marie->lc, TRUE);
+		linphone_core_enable_video_capture(marie->lc, TRUE);
+		linphone_core_enable_video_display(pauline->lc, TRUE);
+		linphone_core_enable_video_capture(pauline->lc, TRUE);
+		wait_for_until(marie->lc, pauline->lc, NULL, 0, 50);
+
+		linphone_core_set_native_preview_window_id(marie->lc, LINPHONE_VIDEO_DISPLAY_AUTO);
+		linphone_core_set_native_video_window_id(marie->lc, LINPHONE_VIDEO_DISPLAY_AUTO);
+		linphone_core_set_native_preview_window_id(pauline->lc, LINPHONE_VIDEO_DISPLAY_AUTO);
+		linphone_core_set_native_video_window_id(pauline->lc, LINPHONE_VIDEO_DISPLAY_AUTO);
+
+		wait_for_until(marie->lc, pauline->lc, NULL, 0, 5000); // Let some time to open and to print something.
+
+		// Switch off
+		linphone_core_enable_video_preview(marie->lc, FALSE);
+		BC_ASSERT_TRUE(remove_video(marie, pauline));
+		linphone_core_set_native_preview_window_id(marie->lc, LINPHONE_VIDEO_DISPLAY_NONE);
+		linphone_core_set_native_video_window_id(marie->lc, LINPHONE_VIDEO_DISPLAY_NONE);
+		linphone_core_set_native_preview_window_id(pauline->lc, LINPHONE_VIDEO_DISPLAY_NONE);
+		linphone_core_set_native_video_window_id(pauline->lc, LINPHONE_VIDEO_DISPLAY_NONE);
+		wait_for_until(marie->lc, pauline->lc, NULL, 0, 50); // Closing windows
+	}
+
+	linphone_core_manager_destroy(marie);
+	linphone_core_manager_destroy(pauline);
+}
+
 static test_t call_video_tests[] = {
     TEST_NO_TAG("Call paused resumed with video", call_paused_resumed_with_video),
     TEST_NO_TAG("Call paused resumed with video enabled", call_paused_resumed_with_video_enabled),
@@ -3894,6 +4027,8 @@ static test_t call_video_tests[] = {
                 video_call_with_auto_video_accept_disabled_on_one_end),
     TEST_NO_TAG("Asymmetrical video call starts with video", asymmetrical_video_call_starts_with_video),
     TEST_NO_TAG("Asymmetrical video call starts without video", asymmetrical_video_call_starts_without_video),
+    TEST_NO_TAG("Asymmetrical video call with flexfec starts with video",
+                asymmetrical_video_call_with_flexfec_starts_with_video),
     TEST_NO_TAG("Asymmetrical video call with callee enabled video first",
                 asymmetrical_video_call_with_callee_enabled_video_first),
     TEST_NO_TAG("Asymmetrical video call 2", asymmetrical_video_call_2),
@@ -3905,7 +4040,7 @@ static test_t call_video_tests[] = {
 
     TEST_NO_TAG("Video call recv-only", call_with_video_recvonly),
     TEST_NO_TAG("Video call without audio, disable video", video_call_without_audio_disable_video),
-};
+    TEST_ONE_TAG("Video call memory", video_call_memory, "skip")};
 
 static test_t call_video_advanced_scenarios_tests[] = {
     TEST_NO_TAG("Call paused resumed with video no sdp ack", call_paused_resumed_with_no_sdp_ack),

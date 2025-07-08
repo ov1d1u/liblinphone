@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010-2022 Belledonne Communications SARL.
+ * Copyright (c) 2010-2024 Belledonne Communications SARL.
  *
  * This file is part of Liblinphone
  * (see https://gitlab.linphone.org/BC/public/liblinphone).
@@ -21,8 +21,9 @@
 #ifndef _L_DICTIONARY_H_
 #define _L_DICTIONARY_H_
 
-#include <belle-sip/object++.hh>
+#include "belle-sip/object++.hh"
 
+#include "buffer/buffer.h"
 #include "c-wrapper/c-wrapper.h"
 #include "linphone/api/c-types.h"
 #include "object/property-container.h"
@@ -50,8 +51,8 @@ public:
 	long long getLongLong(const std::string &name) const;
 	void setProperty(const std::string &name, const long long value);
 
-	LinphoneBuffer *getLinphoneBuffer(const std::string &name) const;
-	void setProperty(const std::string &name, LinphoneBuffer *value);
+	std::shared_ptr<Buffer> getBuffer(const std::string &name) const;
+	void setProperty(const std::string &name, const std::shared_ptr<Buffer> &value);
 
 	const std::list<std::string> getKeys() const;
 };

@@ -70,6 +70,7 @@ public:
 	LinphoneCallCbsVideoDisplayErrorOccurredCb videoDisplayErrorOccurredCb;
 	LinphoneCallCbsAudioDeviceChangedCb audioDeviceChangedCb;
 	LinphoneCallCbsRemoteRecordingCb remoteRecordingCb;
+	LinphoneCallCbsBaudotDetectedCb baudotDetectedCb;
 };
 
 class LINPHONE_PUBLIC Call : public bellesip::HybridObject<LinphoneCall, Call>,
@@ -86,18 +87,11 @@ class LINPHONE_PUBLIC Call : public bellesip::HybridObject<LinphoneCall, Call>,
 	friend class Conference;
 
 public:
-	Call(std::shared_ptr<Core> core,
-	     LinphoneCallDir direction,
-	     const std::shared_ptr<const Address> &from,
-	     const std::shared_ptr<const Address> &to,
-	     const std::shared_ptr<Account> &account,
-	     SalCallOp *op,
-	     const MediaSessionParams *msp);
-
-	Call(std::shared_ptr<Core> core, LinphoneCallDir direction, const std::string &callid);
+	Call(std::shared_ptr<Core> core);
 
 	virtual ~Call() = default;
 
+	void configure(LinphoneCallDir direction, const std::string &callid);
 	void configure(LinphoneCallDir direction,
 	               const std::shared_ptr<const Address> &from,
 	               const std::shared_ptr<const Address> &to,
@@ -117,7 +111,6 @@ public:
 	LinphoneStatus deferUpdate();
 	bool hasTransferPending() const;
 	void oglRender() const;
-	LinphoneStatus pauseFromConference();
 	LinphoneStatus pause();
 	LinphoneStatus redirect(const std::string &redirectUri);
 	LinphoneStatus redirect(const std::shared_ptr<Address> &redirectAddress);
@@ -177,10 +170,10 @@ public:
 	float getRecordVolume() const;
 	std::shared_ptr<Call> getReferer() const;
 	const std::string &getReferTo() const;
-	const std::shared_ptr<Address> getReferToAddress() const;
+	std::shared_ptr<Address> getReferToAddress() const;
 	std::shared_ptr<const Address> getReferredBy() const;
-	const std::shared_ptr<Address> getRemoteAddress() const;
-	const std::shared_ptr<Address> getRemoteContactAddress() const;
+	std::shared_ptr<Address> getRemoteAddress() const;
+	std::shared_ptr<Address> getRemoteContactAddress() const;
 	const std::string &getRemoteContact() const;
 	const MediaSessionParams *getRemoteParams() const;
 	const std::string &getRemoteUserAgent();
@@ -266,6 +259,13 @@ public:
 	std::shared_ptr<const VideoSourceDescriptor> getVideoSource() const;
 
 	// -----------------------------------------------------------------------------
+
+	void enableBaudotDetection(bool enabled);
+	void setBaudotMode(LinphoneBaudotMode mode);
+	void setBaudotSendingStandard(LinphoneBaudotStandard standard);
+	void setBaudotPauseTimeout(uint8_t seconds);
+
+	// -----------------------------------------------------------------------------
 	/* CallSessionListener */
 	void onAckBeingSent(const std::shared_ptr<CallSession> &session, LinphoneHeaders *headers) override;
 	void onAckReceived(const std::shared_ptr<CallSession> &session, LinphoneHeaders *headers) override;
@@ -312,6 +312,10 @@ public:
 	bool isPlayingRingbackTone(const std::shared_ptr<CallSession> &session) override;
 	void onRealTimeTextCharacterReceived(const std::shared_ptr<CallSession> &session,
 	                                     RealtimeTextReceivedCharacter *character) override;
+#ifdef HAVE_BAUDOT
+	void onBaudotCharacterReceived(const std::shared_ptr<CallSession> &session, char receivedCharacter) override;
+	void onBaudotDetected(const std::shared_ptr<CallSession> &session, MSBaudotStandard standard) override;
+#endif /* HAVE_BAUDOT */
 	void onTmmbrReceived(const std::shared_ptr<CallSession> &session, int streamIndex, int tmmbr) override;
 	void onSnapshotTaken(const std::shared_ptr<CallSession> &session, const char *file_path) override;
 	void onStartRingtone(const std::shared_ptr<CallSession> &session) override;
@@ -357,12 +361,21 @@ private:
 	void cleanupSessionAndUnrefCObjectCall();
 
 	void updateRecordState(SalMediaRecord state);
-	void createRemoteConference(const std::shared_ptr<CallSession> &session);
+	void createClientConference(const std::shared_ptr<CallSession> &session);
 	void tryToAddToConference(std::shared_ptr<Conference> &conference, const std::shared_ptr<CallSession> &session);
 	void configureSoundCardsFromCore(const MediaSessionParams *msp);
 
 	void forgeHalfAuthenticationToken(bool localHalfAuthToken) const;
 };
+
+inline std::ostream &operator<<(std::ostream &str, const Call &call) {
+	const auto &localAddress = call.getLocalAddress();
+	auto localAddressStr = (localAddress ? localAddress->toString() : std::string("sip:"));
+	const auto &remoteAddress = call.getRemoteAddress();
+	auto remoteAddressStr = (remoteAddress ? remoteAddress->toString() : std::string("sip:"));
+	str << "Call [" << &call << "] (local=" << localAddressStr << " remote=" << remoteAddressStr << ")";
+	return str;
+}
 
 class CallLogContextualizer : public CoreLogContextualizer {
 public:

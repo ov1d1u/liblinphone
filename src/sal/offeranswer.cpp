@@ -566,6 +566,16 @@ SalStreamDescription OfferAnswerEngine::initiateOutgoingStream(const SalStreamDe
 	return result;
 }
 
+int OfferAnswerEngine::getExtensionId(int localExtensionId, int remoteExtensionId) {
+	// If any of the two is set to 0 then one (or both) of the party does not support the extension.
+	if (localExtensionId == 0 || remoteExtensionId == 0) return 0;
+
+	// If they are not configured with the same id, then use the remote
+	if (localExtensionId != remoteExtensionId) return remoteExtensionId;
+
+	return localExtensionId;
+}
+
 OfferAnswerEngine::optional_sal_stream_configuration OfferAnswerEngine::initiateOutgoingConfiguration(
     const SalStreamDescription &local_offer,
     const SalStreamDescription &remote_answer,
@@ -666,15 +676,12 @@ OfferAnswerEngine::optional_sal_stream_configuration OfferAnswerEngine::initiate
 		}
 	}
 
-	resultCfg.mixer_to_client_extension_id = (remoteCfg.mixer_to_client_extension_id == 0)
-	                                             ? localCfg.mixer_to_client_extension_id
-	                                             : remoteCfg.mixer_to_client_extension_id;
-	resultCfg.client_to_mixer_extension_id = (remoteCfg.client_to_mixer_extension_id == 0)
-	                                             ? localCfg.client_to_mixer_extension_id
-	                                             : remoteCfg.client_to_mixer_extension_id;
-	resultCfg.frame_marking_extension_id = (remoteCfg.frame_marking_extension_id == 0)
-	                                           ? localCfg.frame_marking_extension_id
-	                                           : remoteCfg.frame_marking_extension_id;
+	resultCfg.mixer_to_client_extension_id =
+	    getExtensionId(localCfg.mixer_to_client_extension_id, remoteCfg.mixer_to_client_extension_id);
+	resultCfg.client_to_mixer_extension_id =
+	    getExtensionId(localCfg.client_to_mixer_extension_id, remoteCfg.client_to_mixer_extension_id);
+	resultCfg.frame_marking_extension_id =
+	    getExtensionId(localCfg.frame_marking_extension_id, remoteCfg.frame_marking_extension_id);
 
 	resultCfg.conference_ssrc = remoteCfg.conference_ssrc;
 
@@ -924,15 +931,12 @@ OfferAnswerEngine::optional_sal_stream_configuration OfferAnswerEngine::initiate
 
 	resultCfg.rtcp_mux = remoteCfg.rtcp_mux && localCfg.rtcp_mux;
 
-	resultCfg.mixer_to_client_extension_id = (localCfg.mixer_to_client_extension_id == 0)
-	                                             ? remoteCfg.mixer_to_client_extension_id
-	                                             : localCfg.mixer_to_client_extension_id;
-	resultCfg.client_to_mixer_extension_id = (localCfg.client_to_mixer_extension_id == 0)
-	                                             ? remoteCfg.client_to_mixer_extension_id
-	                                             : localCfg.client_to_mixer_extension_id;
-	resultCfg.frame_marking_extension_id = (localCfg.frame_marking_extension_id == 0)
-	                                           ? remoteCfg.frame_marking_extension_id
-	                                           : localCfg.frame_marking_extension_id;
+	resultCfg.mixer_to_client_extension_id =
+	    getExtensionId(localCfg.mixer_to_client_extension_id, remoteCfg.mixer_to_client_extension_id);
+	resultCfg.client_to_mixer_extension_id =
+	    getExtensionId(localCfg.client_to_mixer_extension_id, remoteCfg.client_to_mixer_extension_id);
+	resultCfg.frame_marking_extension_id =
+	    getExtensionId(localCfg.frame_marking_extension_id, remoteCfg.frame_marking_extension_id);
 
 	resultCfg.conference_ssrc = localCfg.conference_ssrc;
 
@@ -1052,6 +1056,8 @@ OfferAnswerEngine::initiateOutgoing(std::shared_ptr<SalMediaDescription> local_o
 				                                         rs.getChosenConfiguration().rtcp_fb.generic_nack_enabled;
 				actualCfg.rtcp_fb.tmmbr_enabled = ls.getChosenConfiguration().rtcp_fb.tmmbr_enabled &
 				                                  rs.getChosenConfiguration().rtcp_fb.tmmbr_enabled;
+				actualCfg.rtcp_fb.goog_remb_enabled = ls.getChosenConfiguration().rtcp_fb.goog_remb_enabled &
+				                                      rs.getChosenConfiguration().rtcp_fb.goog_remb_enabled;
 				stream.addActualConfiguration(actualCfg);
 			}
 			result->streams.push_back(stream);
@@ -1140,6 +1146,7 @@ OfferAnswerEngine::initiateIncoming(const std::shared_ptr<SalMediaDescription> l
 			// Handle global RTCP FB attributes
 			actualCfg.rtcp_fb.generic_nack_enabled = rs.getChosenConfiguration().rtcp_fb.generic_nack_enabled;
 			actualCfg.rtcp_fb.tmmbr_enabled = rs.getChosenConfiguration().rtcp_fb.tmmbr_enabled;
+			actualCfg.rtcp_fb.goog_remb_enabled = rs.getChosenConfiguration().rtcp_fb.goog_remb_enabled;
 			// Handle media RTCP XR attribute
 			memset(&actualCfg.rtcp_xr, 0, sizeof(actualCfg.rtcp_xr));
 			if (rs.getChosenConfiguration().rtcp_xr.enabled == TRUE) {

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010-2022 Belledonne Communications SARL.
+ * Copyright (c) 2010-2025 Belledonne Communications SARL.
  *
  * This file is part of Liblinphone
  * (see https://gitlab.linphone.org/BC/public/liblinphone).
@@ -146,7 +146,9 @@ static void liblinphone_tester_check_rtcp_base(LinphoneCoreManager *caller,
 	if (linphone_core_rtcp_enabled(caller->lc) && linphone_core_rtcp_enabled(callee->lc)) {
 		BC_ASSERT_GREATER(caller->stat.number_of_rtcp_received, 1, int, "%i");
 		BC_ASSERT_GREATER(callee->stat.number_of_rtcp_received, 1, int, "%i");
-		BC_ASSERT_GREATER_STRICT(linphone_call_stats_get_round_trip_delay(audio_stats1), 0.0, float, "%f");
+		if (linphone_call_stats_get_rtp_packet_sent(audio_stats1) > 0) {
+			BC_ASSERT_GREATER_STRICT(linphone_call_stats_get_round_trip_delay(audio_stats1), 0.0, float, "%f");
+		}
 		BC_ASSERT_GREATER_STRICT(linphone_call_stats_get_round_trip_delay(audio_stats2), 0.0, float, "%f");
 		if (linphone_call_log_video_enabled(linphone_call_get_call_log(c1))) {
 			BC_ASSERT_GREATER_STRICT(linphone_call_stats_get_round_trip_delay(video_stats1), 0.0, float, "%f");
@@ -339,6 +341,7 @@ void simple_call_base_with_rcs(const char *caller_rc,
 
 	if (double_call) {
 		stats pStats = pauline->stat;
+		stats mStats = marie->stat;
 		int nStop = linphone_core_get_tone_manager_stats(pauline->lc)->number_of_stopTone;
 		LinphoneCall *call = linphone_core_invite_address(marie->lc, pauline->identity);
 		BC_ASSERT_PTR_NOT_NULL(call);
@@ -352,6 +355,8 @@ void simple_call_base_with_rcs(const char *caller_rc,
 			linphone_call_accept(pCall);
 			BC_ASSERT_TRUE(wait_for(marie->lc, pauline->lc, &pauline->stat.number_of_LinphoneCallStreamsRunning,
 			                        pStats.number_of_LinphoneCallStreamsRunning + 1));
+			BC_ASSERT_TRUE(wait_for(marie->lc, pauline->lc, &marie->stat.number_of_LinphoneCallStreamsRunning,
+			                        mStats.number_of_LinphoneCallStreamsRunning + 1));
 			liblinphone_tester_check_rtcp(marie, pauline);
 			end_call(marie, pauline);
 		}
@@ -411,8 +416,8 @@ static void simple_call_with_video_declined(void) {
 		BC_ASSERT_FALSE(linphone_call_params_video_enabled(call_lparams));
 		const LinphoneCallParams *call_rparams = linphone_call_get_remote_params(marie_call);
 		BC_ASSERT_FALSE(linphone_call_params_video_enabled(call_rparams));
-		const LinphoneCallParams *call_params = linphone_call_get_current_params(marie_call);
-		BC_ASSERT_FALSE(linphone_call_params_video_enabled(call_params));
+		const LinphoneCallParams *call_cparams = linphone_call_get_current_params(marie_call);
+		BC_ASSERT_FALSE(linphone_call_params_video_enabled(call_cparams));
 	}
 	LinphoneCall *pauline_call = linphone_core_get_call_by_remote_address2(pauline->lc, marie->identity);
 	BC_ASSERT_PTR_NOT_NULL(pauline_call);
@@ -456,8 +461,8 @@ static void simple_call_with_video_declined(void) {
 	if (marie_call) {
 		const LinphoneCallParams *call_rparams = linphone_call_get_remote_params(marie_call);
 		BC_ASSERT_FALSE(linphone_call_params_video_enabled(call_rparams));
-		const LinphoneCallParams *call_params = linphone_call_get_current_params(marie_call);
-		BC_ASSERT_FALSE(linphone_call_params_video_enabled(call_params));
+		const LinphoneCallParams *call_cparams = linphone_call_get_current_params(marie_call);
+		BC_ASSERT_FALSE(linphone_call_params_video_enabled(call_cparams));
 	}
 	if (pauline_call) {
 		const LinphoneCallParams *call_lparams = linphone_call_get_params(pauline_call);
@@ -828,13 +833,13 @@ static void call_outbound_with_multiple_proxy(void) {
 static void call_outbound_using_secondary_account(void) {
 	// Caller
 	LinphoneCoreManager *marie = linphone_core_manager_create("marie_dual_proxy_rc");
-	set_lime_server_and_curve(25519, marie);
+	set_lime_server_and_curve(C25519, marie);
 	linphone_core_manager_start(marie, TRUE);
 
 	// Callee
 	LinphoneCoreManager *pauline =
 	    linphone_core_manager_create(transport_supported(LinphoneTransportTls) ? "pauline_rc" : "pauline_tcp_rc");
-	set_lime_server_and_curve(25519, pauline);
+	set_lime_server_and_curve(C25519, pauline);
 	linphone_core_manager_start(pauline, TRUE);
 
 	BC_ASSERT_TRUE(wait_for(pauline->lc, marie->lc, &pauline->stat.number_of_X3dhUserCreationSuccess, 1));
@@ -1268,6 +1273,101 @@ static void call_with_no_audio_codec(void) {
 	linphone_call_unref(out_call);
 	linphone_core_manager_destroy(callee);
 	linphone_core_manager_destroy(caller);
+}
+
+static void call_with_no_active_stream_on_reinvite(void) {
+	LinphoneCoreManager *marie = linphone_core_manager_new("marie_rc");
+	LinphoneCoreManager *pauline = linphone_core_manager_new("pauline_tcp_rc");
+
+	LinphoneVideoActivationPolicy *vpol = linphone_factory_create_video_activation_policy(linphone_factory_get());
+	linphone_video_activation_policy_set_automatically_initiate(vpol, TRUE);
+	linphone_video_activation_policy_set_automatically_accept(vpol, TRUE);
+	linphone_core_set_video_activation_policy(marie->lc, vpol);
+	linphone_core_set_video_activation_policy(pauline->lc, vpol);
+	linphone_video_activation_policy_unref(vpol);
+
+	linphone_core_enable_video_capture(marie->lc, TRUE);
+	linphone_core_enable_video_display(marie->lc, TRUE);
+	linphone_core_set_video_device(marie->lc, liblinphone_tester_mire_id);
+
+	linphone_core_enable_video_capture(pauline->lc, TRUE);
+	linphone_core_enable_video_display(pauline->lc, TRUE);
+	linphone_core_set_video_device(pauline->lc, liblinphone_tester_mire_id);
+
+	BC_ASSERT_TRUE(call(marie, pauline));
+
+	LinphoneCall *marie_call = linphone_core_get_call_by_remote_address2(marie->lc, pauline->identity);
+	BC_ASSERT_PTR_NOT_NULL(marie_call);
+	if (marie_call) {
+		const LinphoneCallParams *call_lparams = linphone_call_get_params(marie_call);
+		BC_ASSERT_TRUE(linphone_call_params_video_enabled(call_lparams));
+		const LinphoneCallParams *call_rparams = linphone_call_get_remote_params(marie_call);
+		BC_ASSERT_TRUE(linphone_call_params_video_enabled(call_rparams));
+		const LinphoneCallParams *call_cparams = linphone_call_get_current_params(marie_call);
+		BC_ASSERT_TRUE(linphone_call_params_video_enabled(call_cparams));
+	}
+	LinphoneCall *pauline_call = linphone_core_get_call_by_remote_address2(pauline->lc, marie->identity);
+	BC_ASSERT_PTR_NOT_NULL(pauline_call);
+	if (pauline_call) {
+		const LinphoneCallParams *call_lparams = linphone_call_get_params(pauline_call);
+		BC_ASSERT_TRUE(linphone_call_params_video_enabled(call_lparams));
+		const LinphoneCallParams *call_rparams = linphone_call_get_remote_params(pauline_call);
+		BC_ASSERT_TRUE(linphone_call_params_video_enabled(call_rparams));
+		const LinphoneCallParams *call_cparams = linphone_call_get_current_params(pauline_call);
+		BC_ASSERT_TRUE(linphone_call_params_video_enabled(call_cparams));
+	}
+
+	linphone_config_set_int(linphone_core_get_config(pauline->lc), "sip", "defer_update_default", TRUE);
+
+	stats initial_pauline_stat = pauline->stat;
+	stats initial_marie_stat = marie->stat;
+	LinphoneCallParams *marie_params = linphone_core_create_call_params(marie->lc, marie_call);
+	linphone_call_update(marie_call, marie_params);
+	linphone_call_params_unref(marie_params);
+
+	BC_ASSERT_TRUE(wait_for(marie->lc, pauline->lc, &pauline->stat.number_of_LinphoneCallUpdatedByRemote,
+	                        initial_pauline_stat.number_of_LinphoneCallUpdatedByRemote + 1));
+
+	int pauline_defer_update =
+	    !!linphone_config_get_int(linphone_core_get_config(pauline->lc), "sip", "defer_update_default", FALSE);
+	BC_ASSERT_TRUE(pauline_defer_update);
+	if (pauline_defer_update == TRUE) {
+		LinphoneCallParams *pauline_params = linphone_core_create_call_params(pauline->lc, pauline_call);
+		linphone_call_params_enable_audio(pauline_params, FALSE);
+		linphone_call_params_enable_video(pauline_params, FALSE);
+		linphone_call_accept_update(pauline_call, pauline_params);
+		linphone_call_params_unref(pauline_params);
+	}
+	BC_ASSERT_TRUE(wait_for(marie->lc, pauline->lc, &marie->stat.number_of_LinphoneCallUpdating,
+	                        initial_marie_stat.number_of_LinphoneCallUpdating + 1));
+	BC_ASSERT_TRUE(wait_for(marie->lc, pauline->lc, &pauline->stat.number_of_LinphoneCallStreamsRunning,
+	                        initial_pauline_stat.number_of_LinphoneCallStreamsRunning + 1));
+	BC_ASSERT_TRUE(wait_for(marie->lc, pauline->lc, &marie->stat.number_of_LinphoneCallStreamsRunning,
+	                        initial_marie_stat.number_of_LinphoneCallStreamsRunning + 1));
+
+	if (marie_call) {
+		const LinphoneCallParams *call_rparams = linphone_call_get_remote_params(marie_call);
+		BC_ASSERT_FALSE(linphone_call_params_audio_enabled(call_rparams));
+		BC_ASSERT_FALSE(linphone_call_params_video_enabled(call_rparams));
+		const LinphoneCallParams *call_cparams = linphone_call_get_current_params(marie_call);
+		BC_ASSERT_FALSE(linphone_call_params_audio_enabled(call_cparams));
+		BC_ASSERT_FALSE(linphone_call_params_video_enabled(call_cparams));
+	}
+	if (pauline_call) {
+		const LinphoneCallParams *call_lparams = linphone_call_get_params(pauline_call);
+		BC_ASSERT_FALSE(linphone_call_params_audio_enabled(call_lparams));
+		BC_ASSERT_FALSE(linphone_call_params_video_enabled(call_lparams));
+		const LinphoneCallParams *call_rparams = linphone_call_get_remote_params(pauline_call);
+		BC_ASSERT_TRUE(linphone_call_params_video_enabled(call_rparams));
+		BC_ASSERT_TRUE(linphone_call_params_video_enabled(call_rparams));
+		const LinphoneCallParams *call_cparams = linphone_call_get_current_params(pauline_call);
+		BC_ASSERT_FALSE(linphone_call_params_audio_enabled(call_cparams));
+		BC_ASSERT_FALSE(linphone_call_params_video_enabled(call_cparams));
+	}
+
+	end_call(marie, pauline);
+	linphone_core_manager_destroy(marie);
+	linphone_core_manager_destroy(pauline);
 }
 
 static void simple_call_compatibility_mode(void) {
@@ -2374,7 +2474,7 @@ static void call_with_no_sdp_lime(void) {
 	LinphoneCoreManager *marie = linphone_core_manager_new("marie_sips_rc");
 	LinphoneCoreManager *pauline =
 	    linphone_core_manager_create(transport_supported(LinphoneTransportTls) ? "pauline_rc" : "pauline_tcp_rc");
-	set_lime_server_and_curve(25519, pauline);
+	set_lime_server_and_curve(C25519, pauline);
 	linphone_core_manager_start(pauline, TRUE);
 
 	BC_ASSERT_TRUE(wait_for(pauline->lc, marie->lc, &pauline->stat.number_of_X3dhUserCreationSuccess, 1));
@@ -3038,7 +3138,7 @@ static void call_caller_with_custom_header_or_sdp_attributes(void) {
 	linphone_call_params_unref(caller_params);
 
 	sal_default_set_sdp_handling(linphone_core_get_sal(caller_mgr->lc), SalOpSDPNormal);
-	sal_default_set_sdp_handling(linphone_core_get_sal(caller_mgr->lc), SalOpSDPNormal);
+	sal_default_set_sdp_handling(linphone_core_get_sal(callee_mgr->lc), SalOpSDPNormal);
 
 	// Wait for Outgoing Progress
 	if (linphone_core_get_calls_nb(callee_mgr->lc) <= 1)
@@ -3145,7 +3245,7 @@ static void call_callee_with_custom_header_or_sdp_attributes(void) {
 	BC_ASSERT_EQUAL(did_receive_call, !callee_test_params.sdp_simulate_error, int, "%d");
 
 	sal_default_set_sdp_handling(linphone_core_get_sal(caller_mgr->lc), SalOpSDPNormal);
-	sal_default_set_sdp_handling(linphone_core_get_sal(caller_mgr->lc), SalOpSDPNormal);
+	sal_default_set_sdp_handling(linphone_core_get_sal(callee_mgr->lc), SalOpSDPNormal);
 
 	// Wait for Outgoing Progress
 	if (linphone_core_get_calls_nb(callee_mgr->lc) <= 1)
@@ -3233,9 +3333,11 @@ void call_paused_resumed_base(bool_t multicast, bool_t with_losses, bool_t accep
 	linphone_call_ref(call_pauline);
 
 	const LinphoneCallParams *marie_call_lparams = linphone_call_get_params(call_marie);
+	BC_ASSERT_FALSE(linphone_call_params_ringing_disabled(marie_call_lparams));
 	BC_ASSERT_TRUE(linphone_call_params_tone_indications_enabled(marie_call_lparams));
 
 	const LinphoneCallParams *pauline_call_lparams = linphone_call_get_params(call_pauline);
+	BC_ASSERT_FALSE(linphone_call_params_ringing_disabled(pauline_call_lparams));
 	BC_ASSERT_TRUE(linphone_call_params_tone_indications_enabled(pauline_call_lparams));
 
 	/*check if video stream is not offered*/
@@ -5762,7 +5864,7 @@ static void call_state_changed_3(BCTBX_UNUSED(LinphoneCore *lc),
 	ms_free(from);
 }
 
-static void call_with_transport_change_base(bool_t succesfull_call) {
+static void call_with_transport_change_base(bool_t successfull_call) {
 	LinphoneSipTransports sip_tr;
 	LinphoneCoreManager *marie;
 	LinphoneCoreManager *pauline;
@@ -5796,14 +5898,14 @@ static void call_with_transport_change_base(bool_t succesfull_call) {
 		}
 	}
 
-	if (succesfull_call) {
+	if (successfull_call) {
 		BC_ASSERT_TRUE(call(marie, pauline));
 		end_call(marie, pauline);
 	} else linphone_core_invite(marie->lc, "nexiste_pas");
 
-	if (succesfull_call) BC_ASSERT_TRUE(wait_for(marie->lc, pauline->lc, &marie->stat.number_of_LinphoneCallEnd, 1));
+	if (successfull_call) BC_ASSERT_TRUE(wait_for(marie->lc, pauline->lc, &marie->stat.number_of_LinphoneCallEnd, 1));
 	BC_ASSERT_TRUE(wait_for(marie->lc, pauline->lc, &marie->stat.number_of_LinphoneCallReleased, 1));
-	if (succesfull_call) {
+	if (successfull_call) {
 		BC_ASSERT_TRUE(wait_for(marie->lc, pauline->lc, &pauline->stat.number_of_LinphoneCallEnd, 1));
 		BC_ASSERT_TRUE(wait_for(marie->lc, pauline->lc, &pauline->stat.number_of_LinphoneCallReleased, 1));
 	}
@@ -6892,6 +6994,7 @@ static void simple_call_with_gruu(void) {
 	BC_ASSERT_TRUE(linphone_address_has_uri_param(pauline_addr, "gr"));
 	BC_ASSERT_STRING_EQUAL(linphone_address_get_domain(pauline_addr), "sip.example.org");
 
+	linphone_core_disable_call_ringing(marie->lc, TRUE);
 	linphone_core_enable_call_tone_indications(marie->lc, FALSE);
 
 	marie_call = linphone_core_invite_address(marie->lc, pauline_addr);
@@ -6921,9 +7024,11 @@ static void simple_call_with_gruu(void) {
 	BC_ASSERT_TRUE(wait_for(marie->lc, pauline->lc, &marie->stat.number_of_LinphoneCallStreamsRunning, 1));
 
 	const LinphoneCallParams *marie_call_lparams = linphone_call_get_params(marie_call);
+	BC_ASSERT_TRUE(linphone_call_params_ringing_disabled(marie_call_lparams));
 	BC_ASSERT_FALSE(linphone_call_params_tone_indications_enabled(marie_call_lparams));
 
 	const LinphoneCallParams *pauline_call_lparams = linphone_call_get_params(pauline_call);
+	BC_ASSERT_FALSE(linphone_call_params_ringing_disabled(pauline_call_lparams));
 	BC_ASSERT_TRUE(linphone_call_params_tone_indications_enabled(pauline_call_lparams));
 
 	contact_addr = linphone_address_new(linphone_call_get_remote_contact(marie_call));
@@ -7401,9 +7506,9 @@ static void call_with_audio_stream_added_later_on(void) {
 		const LinphoneCallParams *call_rparams = linphone_call_get_remote_params(marie_call);
 		BC_ASSERT_FALSE(linphone_call_params_audio_enabled(call_rparams));
 		BC_ASSERT_TRUE(linphone_call_params_video_enabled(call_rparams));
-		const LinphoneCallParams *call_params = linphone_call_get_current_params(marie_call);
-		BC_ASSERT_FALSE(linphone_call_params_audio_enabled(call_params));
-		BC_ASSERT_TRUE(linphone_call_params_video_enabled(call_rparams));
+		const LinphoneCallParams *call_cparams = linphone_call_get_current_params(marie_call);
+		BC_ASSERT_FALSE(linphone_call_params_audio_enabled(call_cparams));
+		BC_ASSERT_TRUE(linphone_call_params_video_enabled(call_cparams));
 	}
 	if (pauline_call) {
 		const LinphoneCallParams *call_lparams = linphone_call_get_params(pauline_call);
@@ -7437,8 +7542,8 @@ static void call_with_audio_stream_added_later_on(void) {
 		const LinphoneCallParams *call_rparams = linphone_call_get_remote_params(marie_call);
 		BC_ASSERT_TRUE(linphone_call_params_audio_enabled(call_rparams));
 		BC_ASSERT_TRUE(linphone_call_params_video_enabled(call_rparams));
-		const LinphoneCallParams *call_params = linphone_call_get_current_params(marie_call);
-		BC_ASSERT_TRUE(linphone_call_params_audio_enabled(call_params));
+		const LinphoneCallParams *call_cparams = linphone_call_get_current_params(marie_call);
+		BC_ASSERT_TRUE(linphone_call_params_audio_enabled(call_cparams));
 	}
 	if (pauline_call) {
 		const LinphoneCallParams *call_lparams = linphone_call_get_params(pauline_call);
@@ -7762,11 +7867,130 @@ static void call_received_with_tel_uri(void) {
 	linphone_call_terminate(linphone_core_get_current_call(laure->lc));
 
 	BC_ASSERT_TRUE(wait_for(laure->lc, NULL, &laure->stat.number_of_LinphoneCallEnd, 1));
-	BC_ASSERT_TRUE(wait_for_until(laure->lc, NULL, &laure->stat.number_of_LinphoneCallReleased, 1, 36000));
+	BC_ASSERT_TRUE(wait_for_until(laure->lc, NULL, &laure->stat.number_of_LinphoneCallReleased, 1,
+	                              liblinphone_tester_sip_timeout));
 	linphone_core_manager_destroy(laure);
 }
 
-static void call_with_custom_m_line(void) {
+static void call_with_custom_m_line_not_encrypted(void) {
+	const char *invite =
+	    "INVITE sip:fraya1_5c36c@218.107.193.68:40833;instance=1108cf52-f678-4a3a-88f6-2faf1dfdb9f3;transport=tls "
+	    "SIP/2.0\r\n"
+	    "Via: SIP/2.0/TLS 20.103.252.41;rport;branch=z9hG4bK.mgB5K2Q3HmS1QyF41ygNN15B4c\r\n"
+	    "Record-Route: <sips:20.103.252.41:5061;lr>\r\n"
+	    "Record-Route: <sip:10.17.4.52:5059;transport=tcp;lr>\r\n"
+	    "Record-Route: <sip:10.17.4.51:5059;transport=tcp;lr>\r\n"
+	    "Record-Route: <sips:20.103.252.84:5061;lr>\r\n"
+	    "Record-Route: <sip:218.107.193.68:23565;transport=tls;lr>\r\n"
+	    "Record-Route: <sip:192.168.75.3:2222;transport=tcp;lr>\r\n"
+	    "Record-Route: <sip:192.168.75.3:5070;transport=tcp;lr>\r\n"
+	    "Record-Route: <sip:192.168.31.149:5070;transport=tcp;lr>\r\n"
+	    "Record-Route: <sip:192.168.31.149:44830;transport=tcp>\r\n"
+	    "Record-Route: <sip:192.168.31.149:2225;transport=udp;lr>\r\n"
+	    "Record-Route: <sip:192.168.31.104:5060;lr>\r\n"
+	    "Via: SIP/2.0/TCP 10.17.4.51:5059;rport=38317;branch=z9hG4bK.tvBvQQUpBUa7Nm5UrHZe212BHa\r\n"
+	    "Via: SIP/2.0/TLS 192.168.75.3:2224;rport=23565;branch=z9hG4bK.A6DJpwUJQ;received=218.107.193.68\r\n"
+	    "Via: SIP/2.0/TCP 192.168.75.3:5070;rport;branch=z9hG4bK.cDtyF1gQZ1BcDe0rr60N5pB10F\r\n"
+	    "Via: SIP/2.0/TCP 192.168.31.149:44830;rport=44830;branch=z9hG4bK.z~Md5C-XV\r\n"
+	    "Via: SIP/2.0/UDP 192.168.31.104;rport;branch=z9hG4bK.HyNtp97erS931r6FyrK6B0N8vc\r\n"
+	    "Via: SIP/2.0/UDP 192.168.31.123:5060;branch=z9hG4bK124035529;rport=5060\r\n"
+	    "Max-Forwards: 66\r\n"
+	    "From: <sip:0071818@ipgw48dd6199-d874-45da-8e61-d78107b1cbd0>;tag=745175727\r\n"
+	    "To: <sip:750007101001@ipgw48dd6199-d874-45da-8e61-d78107b1cbd0>\r\n"
+	    "Call-ID: 1103078726-5060-13@BJC.BGI.DB.BCD\r\n"
+	    "CSeq: 120 INVITE\r\n"
+	    "Contact: \"MyContact\" <sip:test@127.0.0.1:5060>\r\n"
+	    "User-Agent: My User Agent\r\n"
+	    "Accept: application/sdp, application/dtmf-relay, application/dtmf-relay, application/dtmf-relay, "
+	    "application/dtmf-relay, application/dtmf-relay\r\n"
+	    "Allow: INVITE, ACK, OPTIONS, CANCEL, BYE, SUBSCRIBE, NOTIFY, INFO, REFER, UPDATE, MESSAGE\r\n"
+	    "Supported: replaces, path, timer, eventlist\r\n"
+	    "Privacy: none\r\n"
+	    "Content-Type: application/sdp\r\n"
+	    "P-Access-Network-Info: IEEE-EUI-48;eui-48-addr=D4-EE-07-52-95-FC\r\n"
+	    "P-Emergency-Info: IEEE-EUI-48;eui-48-addr=C0-74-AD-B0-01-04\r\n"
+	    "P-Preferred-Identity: \"0071818\" <sip:0071818@192.168.31.104:5060>\r\n"
+	    "Content-Length: 1665\r\n"
+	    "\r\n"
+	    "v=0\r\n"
+	    "o=0071818 8000 8000 IN IP4 192.168.31.123\r\n"
+	    "s=SIP Call\r\n"
+	    "c=IN IP4 20.103.252.84\r\n"
+	    "b=AS:1\r\n"
+	    "t=0 0\r\n"
+	    "a=10.0.65.0:yes\r\n"
+	    "a=192.168.31.149:yes\r\n"
+	    "a=nortpproxy:yes\r\n"
+	    "m=audio 50024 RTP/SAVP 0 8 9 101\r\n"
+	    "a=rtpmap:0 PCMU/8000\r\n"
+	    "a=rtpmap:8 PCMA/8000\r\n"
+	    "a=rtpmap:9 G722/8000\r\n"
+	    "a=rtpmap:101 telephone-event/8000\r\n"
+	    "a=fmtp:101 0-15\r\n"
+	    "a=rtcp:50025\r\n"
+	    "a=ptime:20\r\n"
+	    "a=crypto:1 AES_CM_256_HMAC_SHA1_80 inline:QPPeFseKBO3ISJ5AUx5dFqS7XqMzjjOy8J/c2ju/B3uy5pJ5cJZmON4EeDEj1Q==\r\n"
+	    "a=crypto:2 AES_CM_256_HMAC_SHA1_32 inline:R8eQpWvDNJ51JD5R/nkQBvXC7Ic8XB2ilPunDCzK4XORcRn8NE2bqXHZ+3BSCw==\r\n"
+	    "a=crypto:3 AES_CM_128_HMAC_SHA1_80 inline:dkfOYs4KvuusUuZTXhIdP4avsJ+r5OxGjV0fiM1y\r\n"
+	    "a=crypto:4 AES_CM_128_HMAC_SHA1_32 inline:lEO5YqWIbGNzGLVabBNsiVLyOAKR5OZ9KnTbSvyo\r\n"
+	    "m=video 49228 RTP/SAVP 99 96 98 120\r\n"
+	    "b=AS:2240\r\n"
+	    "a=rtpmap:99 H264/90000\r\n"
+	    "a=fmtp:99 profile-level-id=428028; packetization-mode=1\r\n"
+	    "a=rtpmap:96 H264/90000\r\n"
+	    "a=fmtp:96 profile-level-id=4D0028; packetization-mode=1\r\n"
+	    "a=rtpmap:98 H264/90000\r\n"
+	    "a=fmtp:98 profile-level-id=640028; packetization-mode=1\r\n"
+	    "a=rtpmap:120 GS-FEC/90000\r\n"
+	    "a=rtcp:49229\r\n"
+	    "a=rtcp-fb:* nack\r\n"
+	    "a=rtcp-fb:* nack pli\r\n"
+	    "a=rtcp-fb:* ccm fir\r\n"
+	    "a=gs-fec-version:2\r\n"
+	    "a=gs-fec-version:1\r\n"
+	    "a=crypto:1 AES_CM_256_HMAC_SHA1_80 inline:vJDsdfKR/V71cXeqy+O+N2wQKqUTu4n5ObNtFP1qvLn6qC/tOixLL53C2Willw==\r\n"
+	    "a=crypto:2 AES_CM_256_HMAC_SHA1_32 inline:oBKoyre7hUC0vvMi0vGMj6qGN9lzcQa/oKOBegwnEaw5uXbwdPswKbojS4wU1w==\r\n"
+	    "a=crypto:3 AES_CM_128_HMAC_SHA1_80 inline:G79dU5jRxJ6QZUIR30448PpxqnBhHmuRRyW1krLJ\r\n"
+	    "a=crypto:4 AES_CM_128_HMAC_SHA1_32 inline:ac2IxyAhmOW/KEoBOSlPchlJ48O5ReIl1ilKi7z8\r\n"
+	    "a=content:main\r\n"
+	    "a=label:11\r\n"
+	    "m=application 65488 UDP/BFCP 18868056\r\n"
+	    "a=confid:1\r\n"
+	    "a=userid:1\r\n"
+	    "a=floorid:1 mstrm:12\r\n"
+	    "a=floorctrl:c-s\r\n"
+	    "\r\n";
+
+	LinphoneCoreManager *laure = linphone_core_manager_new("laure_rc_udp");
+
+	LinphoneVideoActivationPolicy *vpol = linphone_factory_create_video_activation_policy(linphone_factory_get());
+	linphone_video_activation_policy_set_automatically_initiate(vpol, TRUE);
+	linphone_video_activation_policy_set_automatically_accept(vpol, TRUE);
+	linphone_core_set_video_activation_policy(laure->lc, vpol);
+	linphone_core_enable_video_capture(laure->lc, TRUE);
+	linphone_core_enable_video_display(laure->lc, TRUE);
+	linphone_video_activation_policy_unref(vpol);
+
+	LinphoneTransports *tp = linphone_core_get_transports_used(laure->lc);
+	BC_ASSERT_TRUE(liblinphone_tester_send_data(invite, strlen(invite), "127.0.0.1",
+	                                            linphone_transports_get_udp_port(tp), SOCK_DGRAM) > 0);
+	linphone_transports_unref(tp);
+
+	BC_ASSERT_TRUE(wait_for(laure->lc, NULL, &laure->stat.number_of_LinphoneCallIncomingReceived, 1));
+	LinphoneCall *laure_call = linphone_core_get_current_call(laure->lc);
+	BC_ASSERT_PTR_NOT_NULL(laure_call);
+	linphone_call_accept(laure_call);
+	BC_ASSERT_TRUE(wait_for(laure->lc, NULL, &laure->stat.number_of_LinphoneCallStreamsRunning, 1));
+	BC_ASSERT_TRUE(check_custom_m_line(laure_call, "application"));
+	linphone_call_terminate(laure_call);
+
+	BC_ASSERT_TRUE(wait_for(laure->lc, NULL, &laure->stat.number_of_LinphoneCallEnd, 1));
+	BC_ASSERT_TRUE(wait_for_until(laure->lc, NULL, &laure->stat.number_of_LinphoneCallReleased, 1,
+	                              liblinphone_tester_sip_timeout));
+	linphone_core_manager_destroy(laure);
+}
+
+static void call_with_custom_m_line_and_crappy_to_header(void) {
 	const char *invite_template =
 	    "INVITE "
 	    "sip:%s@49.36.181.143:33703;transport=tcp;pn-key=7ca80b71bccdbda72957091955dec66f;aor=rsystems1%%40sip1."
@@ -7832,7 +8056,8 @@ static void call_with_custom_m_line(void) {
 	linphone_call_terminate(laure_call);
 
 	BC_ASSERT_TRUE(wait_for(laure->lc, NULL, &laure->stat.number_of_LinphoneCallEnd, 1));
-	BC_ASSERT_TRUE(wait_for_until(laure->lc, NULL, &laure->stat.number_of_LinphoneCallReleased, 1, 36000));
+	BC_ASSERT_TRUE(wait_for_until(laure->lc, NULL, &laure->stat.number_of_LinphoneCallReleased, 1,
+	                              liblinphone_tester_sip_timeout));
 
 	/* Make sure that the call-log was reported as belonging to laure's SIP account, despite the To address that does
 	 * not mention sip.example.org. */
@@ -7845,6 +8070,366 @@ static void call_with_custom_m_line(void) {
 	bctbx_list_free_with_data(call_logs, (bctbx_list_free_func)linphone_call_log_unref);
 	bctbx_free(invite);
 	linphone_core_manager_destroy(laure);
+}
+
+static void call_with_from_and_to_without_domain(void) {
+	const char *invite_template =
+	    "INVITE sip:%s@10.0.0.210:35932;transport=tls SIP/2.0\r\n"
+	    "Via: SIP/2.0/TLS 10.0.0.60:5061;branch=z9hG4bK79920c86;rport\r\n"
+	    "Max-Forwards: 70\r\n"
+	    "From: <sip:lise@10.0.0.60>;tag=as5d5122vb\r\n"
+	    "To: <sip:%s@10.0.0.210:35932;transport=tls>\r\n"
+	    "Contact: <sip:lise@10.0.0.60:5061;transport=TLS>\r\n"
+	    "CSeq: 102 INVITE\r\n"
+	    "Call-ID: 12bc634d4dee9a6a1829a7e07ff4b02d@10.0.0.60:5061\r\n"
+	    "Allow: INVITE, ACK, CANCEL, OPTIONS, BYE, REFER, SUBSCRIBE, NOTIFY, INFO, PUBLISH, MESSAGE\r\n"
+	    "Record-route: <sip:sip1.example.org;lr>, <sip:sip2.example.org;lr>\r\n"
+	    "Supported: replaces, timer\r\n"
+	    "Content-Type: application/sdp\r\n"
+	    "\r\n"
+	    "v=0\r\n"
+	    "o=root 1242761950 1242761950 IN IP4 10.0.0.60\r\n"
+	    "s=voip.ms\r\n"
+	    "c=IN IP4 10.0.0.60\r\n"
+	    "t=0 0\r\n"
+	    "m=audio 18368 RTP/AVP 0 18 9 101\r\n"
+	    "a=rtpmap:0 PCMU/8000\r\n"
+	    "a=rtpmap:18 G729/8000\r\n"
+	    "a=fmtp:18 annexb=no\r\n"
+	    "a=rtpmap:9 G722/8000\r\n"
+	    "a=rtpmap:101 telephone-event/8000\r\n"
+	    "a=fmtp:101 0-16\r\n"
+	    "a=ptime:20\r\n"
+	    "a=sendrecv\r\n";
+
+	LinphoneCoreManager *laure = linphone_core_manager_new("laure_rc_udp");
+
+	LinphoneTransports *tp = linphone_core_get_transports_used(laure->lc);
+	const char *laure_username = linphone_address_get_username(laure->identity);
+	char *invite = bctbx_strdup_printf(invite_template, laure_username, laure_username);
+	bctbx_list_t *call_logs;
+
+	BC_ASSERT_TRUE(liblinphone_tester_send_data(invite, strlen(invite), "127.0.0.1",
+	                                            linphone_transports_get_udp_port(tp), SOCK_DGRAM) > 0);
+	linphone_transports_unref(tp);
+
+	BC_ASSERT_TRUE(wait_for(laure->lc, NULL, &laure->stat.number_of_LinphoneCallIncomingReceived, 1));
+	LinphoneCall *laure_call = linphone_core_get_current_call(laure->lc);
+	BC_ASSERT_PTR_NOT_NULL(laure_call);
+	linphone_call_terminate(laure_call);
+	BC_ASSERT_TRUE(wait_for(laure->lc, NULL, &laure->stat.number_of_LinphoneCallEnd, 1));
+	BC_ASSERT_TRUE(wait_for_until(laure->lc, NULL, &laure->stat.number_of_LinphoneCallReleased, 1,
+	                              liblinphone_tester_sip_timeout));
+
+	/* Make sure that the call-log was reported as belonging to laure's SIP account, despite the To address that does
+	 * not mention sip.example.org. */
+	call_logs = linphone_account_get_call_logs(linphone_core_get_default_account(laure->lc));
+	if (BC_ASSERT_PTR_NOT_NULL(call_logs)) {
+		BC_ASSERT_TRUE(bctbx_list_size(call_logs) == 1);
+		LinphoneCallLog *clog = (LinphoneCallLog *)call_logs->data;
+		BC_ASSERT_STRING_EQUAL(linphone_address_get_domain(linphone_call_log_get_to_address(clog)), "sip.example.org");
+	}
+	bctbx_list_free_with_data(call_logs, (bctbx_list_free_func)linphone_call_log_unref);
+	bctbx_free(invite);
+	linphone_core_manager_destroy(laure);
+}
+
+static void call_with_correct_local_account_in_request_uri(void) {
+	const char *invite_template =
+	    "INVITE sip:%s@10.0.0.210:35932;transport=tls SIP/2.0\r\n"
+	    "Via: SIP/2.0/TLS 10.0.0.60:5061;branch=z9hG4bK79920c86;rport\r\n"
+	    "Max-Forwards: 70\r\n"
+	    "From: <sip:lise@sip.example.org>;tag=as5d5122vb\r\n"
+	    "To: <sip:ghost@sip.doesntexists.com:35932;transport=tls>\r\n"
+	    "Contact: <sip:lise@10.0.0.60:5061;transport=TLS>\r\n"
+	    "CSeq: 102 INVITE\r\n"
+	    "Call-ID: 12bc634d4dee9a6a1829a7e07ff4b02d@10.0.0.60:5061\r\n"
+	    "Allow: INVITE, ACK, CANCEL, OPTIONS, BYE, REFER, SUBSCRIBE, NOTIFY, INFO, PUBLISH, MESSAGE\r\n"
+	    "Supported: replaces, timer\r\n"
+	    "Content-Type: application/sdp\r\n"
+	    "\r\n"
+	    "v=0\r\n"
+	    "o=root 1242761950 1242761950 IN IP4 10.0.0.60\r\n"
+	    "s=voip.ms\r\n"
+	    "c=IN IP4 10.0.0.60\r\n"
+	    "t=0 0\r\n"
+	    "m=audio 18368 RTP/AVP 0 18 9 101\r\n"
+	    "a=rtpmap:0 PCMU/8000\r\n"
+	    "a=rtpmap:18 G729/8000\r\n"
+	    "a=fmtp:18 annexb=no\r\n"
+	    "a=rtpmap:9 G722/8000\r\n"
+	    "a=rtpmap:101 telephone-event/8000\r\n"
+	    "a=fmtp:101 0-16\r\n"
+	    "a=ptime:20\r\n"
+	    "a=sendrecv\r\n";
+
+	LinphoneCoreManager *laure = linphone_core_manager_new("laure_rc_udp");
+
+	LinphoneTransports *tp = linphone_core_get_transports_used(laure->lc);
+	const char *laure_username = linphone_address_get_username(laure->identity);
+	char *invite = bctbx_strdup_printf(invite_template, laure_username);
+	bctbx_list_t *call_logs;
+
+	BC_ASSERT_TRUE(liblinphone_tester_send_data(invite, strlen(invite), "127.0.0.1",
+	                                            linphone_transports_get_udp_port(tp), SOCK_DGRAM) > 0);
+	linphone_transports_unref(tp);
+
+	BC_ASSERT_TRUE(wait_for(laure->lc, NULL, &laure->stat.number_of_LinphoneCallIncomingReceived, 1));
+	LinphoneCall *laure_call = linphone_core_get_current_call(laure->lc);
+	BC_ASSERT_PTR_NOT_NULL(laure_call);
+	linphone_call_terminate(laure_call);
+	BC_ASSERT_TRUE(wait_for(laure->lc, NULL, &laure->stat.number_of_LinphoneCallEnd, 1));
+	BC_ASSERT_TRUE(wait_for_until(laure->lc, NULL, &laure->stat.number_of_LinphoneCallReleased, 1,
+	                              liblinphone_tester_sip_timeout));
+
+	/* Make sure that the call-log was reported as belonging to laure's SIP account, despite the To address that does
+	 * not mention sip.example.org. */
+	call_logs = linphone_account_get_call_logs(linphone_core_get_default_account(laure->lc));
+	if (BC_ASSERT_PTR_NOT_NULL(call_logs)) {
+		BC_ASSERT_TRUE(bctbx_list_size(call_logs) == 1);
+		LinphoneCallLog *clog = (LinphoneCallLog *)call_logs->data;
+		BC_ASSERT_STRING_EQUAL(linphone_address_get_domain(linphone_call_log_get_to_address(clog)), "sip.example.org");
+	}
+	bctbx_list_free_with_data(call_logs, (bctbx_list_free_func)linphone_call_log_unref);
+	bctbx_free(invite);
+	linphone_core_manager_destroy(laure);
+}
+
+void call_with_core_without_media(void) {
+	LinphoneCoreManager *marie = linphone_core_manager_new("marie_rc_without_media");
+	LinphoneCoreManager *pauline =
+	    linphone_core_manager_new(transport_supported(LinphoneTransportTls) ? "pauline_rc" : "pauline_tcp_rc");
+
+	// Reduce the nortp timeout to end the test faster
+	linphone_core_set_nortp_timeout(pauline->lc, 3);
+
+	disable_all_audio_codecs_except_one(pauline->lc, "opus", 48000);
+	// disable_all_video_codecs_except_one(pauline->lc, "vp8");
+
+	LinphoneVideoActivationPolicy *pol = linphone_factory_create_video_activation_policy(linphone_factory_get());
+	linphone_video_activation_policy_set_automatically_accept(pol, TRUE);
+	linphone_core_set_video_activation_policy(pauline->lc, pol);
+	linphone_core_set_video_device(pauline->lc, liblinphone_tester_mire_id);
+	linphone_core_enable_video_capture(pauline->lc, TRUE);
+	linphone_core_enable_video_display(pauline->lc, TRUE);
+	linphone_video_activation_policy_unref(pol);
+
+	BC_ASSERT_NOT_EQUAL(marie->stat.number_of_LinphoneCoreFirstCallStarted, 1, int, "%d");
+	BC_ASSERT_NOT_EQUAL(pauline->stat.number_of_LinphoneCoreFirstCallStarted, 1, int, "%d");
+	BC_ASSERT_NOT_EQUAL(marie->stat.number_of_LinphoneCoreLastCallEnded, 1, int, "%d");
+	BC_ASSERT_NOT_EQUAL(pauline->stat.number_of_LinphoneCoreLastCallEnded, 1, int, "%d");
+
+	LinphoneCallParams *params = linphone_core_create_call_params(marie->lc, NULL);
+	LinphoneContent *content = linphone_core_create_content(marie->lc);
+	linphone_content_set_type(content, "application");
+	linphone_content_set_subtype(content, "sdp");
+	linphone_content_set_utf8_text(
+	    content,
+	    "v=0\r\n"
+	    "o=- 6646531434124232327 2 IN IP4 127.0.0.1\r\n"
+	    "s=-\r\n"
+	    "t=0 0\r\n"
+	    "a=group:BUNDLE 0 1\r\n"
+	    "a=extmap-allow-mixed\r\n"
+	    "a=msid-semantic: WMS dee12576-f30b-4893-83d3-eac27ee10d8d\r\n"
+	    "m=audio 9 UDP/TLS/RTP/SAVPF 111 63 9 0 8 13 110 126\r\n"
+	    "c=IN IP4 0.0.0.0\r\n"
+	    "a=rtcp:9 IN IP4 0.0.0.0\r\n"
+	    "a=ice-ufrag:eQJT\r\n"
+	    "a=ice-pwd:WIC+snfuYSyendsry0+rQEO1\r\n"
+	    "a=ice-options:trickle\r\n"
+	    "a=fingerprint:sha-256 "
+	    "EE:D5:B7:7C:2B:07:E6:C3:D8:76:A8:6F:E3:CF:E0:E6:AB:42:29:DE:AD:A1:8E:55:11:E7:81:4B:4C:0D:F1:46\r\n"
+	    "a=setup:actpass\r\n"
+	    "a=mid:0\r\n"
+	    "a=extmap:1 urn:ietf:params:rtp-hdrext:ssrc-audio-level\r\n"
+	    "a=extmap:2 http://www.webrtc.org/experiments/rtp-hdrext/abs-send-time\r\n"
+	    "a=extmap:3 http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01\r\n"
+	    "a=extmap:4 urn:ietf:params:rtp-hdrext:sdes:mid\r\n"
+	    "a=sendrecv\r\n"
+	    "a=msid:dee12576-f30b-4893-83d3-eac27ee10d8d d4ad49b2-f4ab-48b9-8aa8-621361146f2c\r\n"
+	    "a=rtcp-mux\r\n"
+	    "a=rtcp-rsize\r\n"
+	    "a=rtpmap:111 opus/48000/2\r\n"
+	    "a=rtcp-fb:111 transport-cc\r\n"
+	    "a=rtcp-fb:111 goog-remb\r\n"
+	    "a=fmtp:111 minptime=10;useinbandfec=1\r\n"
+	    "a=rtpmap:63 red/48000/2\r\n"
+	    "a=fmtp:63 111/111\r\n"
+	    "a=rtpmap:9 G722/8000\r\n"
+	    "a=rtpmap:0 PCMU/8000\r\n"
+	    "a=rtpmap:8 PCMA/8000\r\n"
+	    "a=rtpmap:13 CN/8000\r\n"
+	    "a=rtpmap:110 telephone-event/48000\r\n"
+	    "a=rtpmap:126 telephone-event/8000\r\n"
+	    "a=ssrc:2557628080 cname:mPaUVqJCMZayFJgz\r\n"
+	    "a=ssrc:2557628080 msid:dee12576-f30b-4893-83d3-eac27ee10d8d d4ad49b2-f4ab-48b9-8aa8-621361146f2c\r\n"
+	    "m=video 9 UDP/TLS/RTP/SAVPF 96 97 102 103 104 105 106 107 108 109 127 125 39 40 45 46 98 99 100 101 "
+	    "112 113 116 117 118\r\n"
+	    "c=IN IP4 0.0.0.0\r\n"
+	    "a=rtcp:9 IN IP4 0.0.0.0\r\n"
+	    "a=ice-ufrag:eQJT\r\n"
+	    "a=ice-pwd:WIC+snfuYSyendsry0+rQEO1\r\n"
+	    "a=ice-options:trickle\r\n"
+	    "a=fingerprint:sha-256 "
+	    "EE:D5:B7:7C:2B:07:E6:C3:D8:76:A8:6F:E3:CF:E0:E6:AB:42:29:DE:AD:A1:8E:55:11:E7:81:4B:4C:0D:F1:46\r\n"
+	    "a=setup:actpass\r\n"
+	    "a=mid:1\r\n"
+	    "a=extmap:14 urn:ietf:params:rtp-hdrext:toffset\r\n"
+	    "a=extmap:2 http://www.webrtc.org/experiments/rtp-hdrext/abs-send-time\r\n"
+	    "a=extmap:13 urn:3gpp:video-orientation\r\n"
+	    "a=extmap:3 http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01\r\n"
+	    "a=extmap:5 http://www.webrtc.org/experiments/rtp-hdrext/playout-delay\r\n"
+	    "a=extmap:6 http://www.webrtc.org/experiments/rtp-hdrext/video-content-type\r\n"
+	    "a=extmap:7 http://www.webrtc.org/experiments/rtp-hdrext/video-timing\r\n"
+	    "a=extmap:8 http://www.webrtc.org/experiments/rtp-hdrext/color-space\r\n"
+	    "a=extmap:4 urn:ietf:params:rtp-hdrext:sdes:mid\r\n"
+	    "a=extmap:10 urn:ietf:params:rtp-hdrext:sdes:rtp-stream-id\r\n"
+	    "a=extmap:11 urn:ietf:params:rtp-hdrext:sdes:repaired-rtp-stream-id\r\n"
+	    "a=sendrecv\r\n"
+	    "a=msid:dee12576-f30b-4893-83d3-eac27ee10d8d e879805a-7d32-4872-9781-3b0a5ae539ff\r\n"
+	    "a=rtcp-mux\r\n"
+	    "a=rtcp-rsize\r\n"
+	    "a=rtpmap:96 VP8/90000\r\n"
+	    "a=rtcp-fb:96 goog-remb\r\n"
+	    "a=rtcp-fb:96 transport-cc\r\n"
+	    "a=rtcp-fb:96 ccm fir\r\n"
+	    "a=rtcp-fb:96 nack\r\n"
+	    "a=rtcp-fb:96 nack pli\r\n"
+	    "a=rtpmap:97 rtx/90000\r\n"
+	    "a=fmtp:97 apt=96\r\n"
+	    "a=rtpmap:102 H264/90000\r\n"
+	    "a=rtcp-fb:102 goog-remb\r\n"
+	    "a=rtcp-fb:102 transport-cc\r\n"
+	    "a=rtcp-fb:102 ccm fir\r\n"
+	    "a=rtcp-fb:102 nack\r\n"
+	    "a=rtcp-fb:102 nack pli\r\n"
+	    "a=fmtp:102 level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42001f\r\n"
+	    "a=rtpmap:103 rtx/90000\r\n"
+	    "a=fmtp:103 apt=102\r\n"
+	    "a=rtpmap:104 H264/90000\r\n"
+	    "a=rtcp-fb:104 goog-remb\r\n"
+	    "a=rtcp-fb:104 transport-cc\r\n"
+	    "a=rtcp-fb:104 ccm fir\r\n"
+	    "a=rtcp-fb:104 nack\r\n"
+	    "a=rtcp-fb:104 nack pli\r\n"
+	    "a=fmtp:104 level-asymmetry-allowed=1;packetization-mode=0;profile-level-id=42001f\r\n"
+	    "a=rtpmap:105 rtx/90000\r\n"
+	    "a=fmtp:105 apt=104\r\n"
+	    "a=rtpmap:106 H264/90000\r\n"
+	    "a=rtcp-fb:106 goog-remb\r\n"
+	    "a=rtcp-fb:106 transport-cc\r\n"
+	    "a=rtcp-fb:106 ccm fir\r\n"
+	    "a=rtcp-fb:106 nack\r\n"
+	    "a=rtcp-fb:106 nack pli\r\n"
+	    "a=fmtp:106 level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f\r\n"
+	    "a=rtpmap:107 rtx/90000\r\n"
+	    "a=fmtp:107 apt=106\r\n"
+	    "a=rtpmap:108 H264/90000\r\n"
+	    "a=rtcp-fb:108 goog-remb\r\n"
+	    "a=rtcp-fb:108 transport-cc\r\n"
+	    "a=rtcp-fb:108 ccm fir\r\n"
+	    "a=rtcp-fb:108 nack\r\n"
+	    "a=rtcp-fb:108 nack pli\r\n"
+	    "a=fmtp:108 level-asymmetry-allowed=1;packetization-mode=0;profile-level-id=42e01f\r\n"
+	    "a=rtpmap:109 rtx/90000\r\n"
+	    "a=fmtp:109 apt=108\r\n"
+	    "a=rtpmap:127 H264/90000\r\n"
+	    "a=rtcp-fb:127 goog-remb\r\n"
+	    "a=rtcp-fb:127 transport-cc\r\n"
+	    "a=rtcp-fb:127 ccm fir\r\n"
+	    "a=rtcp-fb:127 nack\r\n"
+	    "a=rtcp-fb:127 nack pli\r\n"
+	    "a=fmtp:127 level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=4d001f\r\n"
+	    "a=rtpmap:125 rtx/90000\r\n"
+	    "a=fmtp:125 apt=127\r\n"
+	    "a=rtpmap:39 H264/90000\r\n"
+	    "a=rtcp-fb:39 goog-remb\r\n"
+	    "a=rtcp-fb:39 transport-cc\r\n"
+	    "a=rtcp-fb:39 ccm fir\r\n"
+	    "a=rtcp-fb:39 nack\r\n"
+	    "a=rtcp-fb:39 nack pli\r\n"
+	    "a=fmtp:39 level-asymmetry-allowed=1;packetization-mode=0;profile-level-id=4d001f\r\n"
+	    "a=rtpmap:40 rtx/90000\r\n"
+	    "a=fmtp:40 apt=39\r\n"
+	    "a=rtpmap:45 AV1/90000\r\n"
+	    "a=rtcp-fb:45 goog-remb\r\n"
+	    "a=rtcp-fb:45 transport-cc\r\n"
+	    "a=rtcp-fb:45 ccm fir\r\n"
+	    "a=rtcp-fb:45 nack\r\n"
+	    "a=rtcp-fb:45 nack pli\r\n"
+	    "a=fmtp:45 level-idx=5;profile=0;tier=0\r\n"
+	    "a=rtpmap:46 rtx/90000\r\n"
+	    "a=fmtp:46 apt=45\r\n"
+	    "a=rtpmap:98 VP9/90000\r\n"
+	    "a=rtcp-fb:98 goog-remb\r\n"
+	    "a=rtcp-fb:98 transport-cc\r\n"
+	    "a=rtcp-fb:98 ccm fir\r\n"
+	    "a=rtcp-fb:98 nack\r\n"
+	    "a=rtcp-fb:98 nack pli\r\n"
+	    "a=fmtp:98 profile-id=0\r\n"
+	    "a=rtpmap:99 rtx/90000\r\n"
+	    "a=fmtp:99 apt=98\r\n"
+	    "a=rtpmap:100 VP9/90000\r\n"
+	    "a=rtcp-fb:100 goog-remb\r\n"
+	    "a=rtcp-fb:100 transport-cc\r\n"
+	    "a=rtcp-fb:100 ccm fir\r\n"
+	    "a=rtcp-fb:100 nack\r\n"
+	    "a=rtcp-fb:100 nack pli\r\n"
+	    "a=fmtp:100 profile-id=2\r\n"
+	    "a=rtpmap:101 rtx/90000\r\n"
+	    "a=fmtp:101 apt=100\r\n"
+	    "a=rtpmap:112 H264/90000\r\n"
+	    "a=rtcp-fb:112 goog-remb\r\n"
+	    "a=rtcp-fb:112 transport-cc\r\n"
+	    "a=rtcp-fb:112 ccm fir\r\n"
+	    "a=rtcp-fb:112 nack\r\n"
+	    "a=rtcp-fb:112 nack pli\r\n"
+	    "a=fmtp:112 level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=64001f\r\n"
+	    "a=rtpmap:113 rtx/90000\r\n"
+	    "a=fmtp:113 apt=112\r\n"
+	    "a=rtpmap:116 red/90000\r\n"
+	    "a=rtpmap:117 rtx/90000\r\n"
+	    "a=fmtp:117 apt=116\r\n"
+	    "a=rtpmap:118 ulpfec/90000\r\n"
+	    "a=ssrc-group:FID 489109307 1592583860\r\n"
+	    "a=ssrc:489109307 cname:mPaUVqJCMZayFJgz\r\n"
+	    "a=ssrc:489109307 msid:dee12576-f30b-4893-83d3-eac27ee10d8d e879805a-7d32-4872-9781-3b0a5ae539ff\r\n"
+	    "a=ssrc:1592583860 cname:mPaUVqJCMZayFJgz\r\n"
+	    "a=ssrc:1592583860 msid:dee12576-f30b-4893-83d3-eac27ee10d8d e879805a-7d32-4872-9781-3b0a5ae539ff\r\n");
+
+	linphone_call_params_add_custom_content(params, content);
+
+	BC_ASSERT_PTR_NOT_NULL(linphone_core_invite_address_with_params_2(marie->lc, pauline->identity, params, "", NULL));
+	linphone_content_unref(content);
+	linphone_call_params_unref(params);
+
+	BC_ASSERT_TRUE(wait_for_until(marie->lc, pauline->lc, &pauline->stat.number_of_LinphoneCallIncomingReceived, 1,
+	                              liblinphone_tester_sip_timeout));
+
+	LinphoneCall *pauline_call = linphone_core_get_current_call(pauline->lc);
+	BC_ASSERT_PTR_NOT_NULL(pauline_call);
+
+	linphone_call_accept(pauline_call);
+
+	BC_ASSERT_TRUE(wait_for_until(marie->lc, pauline->lc, &marie->stat.number_of_LinphoneCallStreamsRunning, 1,
+	                              liblinphone_tester_sip_timeout));
+
+	BC_ASSERT_EQUAL(marie->stat.number_of_LinphoneCoreFirstCallStarted, 1, int, "%d");
+	BC_ASSERT_EQUAL(pauline->stat.number_of_LinphoneCoreFirstCallStarted, 1, int, "%d");
+	BC_ASSERT_NOT_EQUAL(marie->stat.number_of_LinphoneCoreLastCallEnded, 1, int, "%d");
+	BC_ASSERT_NOT_EQUAL(pauline->stat.number_of_LinphoneCoreLastCallEnded, 1, int, "%d");
+
+	pauline_call = linphone_core_get_current_call(pauline->lc);
+	BC_ASSERT_PTR_NOT_NULL(pauline_call);
+
+	BC_ASSERT_TRUE(wait_for(marie->lc, pauline->lc, &pauline->stat.number_of_LinphoneCallEnd, 1));
+
+	// Nortp timeout result in a LinphoneReasonIOError
+	BC_ASSERT_EQUAL(linphone_call_get_reason(pauline_call), LinphoneReasonIOError, int, "%d");
+
+	linphone_core_manager_destroy(marie);
+	linphone_core_manager_destroy(pauline);
 }
 
 static test_t call_tests[] = {
@@ -7911,6 +8496,7 @@ static test_t call2_tests[] = {
     TEST_NO_TAG("Call with specified codec bitrate", call_with_specified_codec_bitrate),
     TEST_NO_TAG("Call with maxptime", call_with_maxptime),
     TEST_NO_TAG("Call with no audio codec", call_with_no_audio_codec),
+    TEST_NO_TAG("Call with no active stream on reINVITE", call_with_no_active_stream_on_reinvite),
     TEST_NO_TAG("Call with in-dialog UPDATE request", call_with_in_dialog_update),
     TEST_NO_TAG("Call with in-dialog very early call request", call_with_very_early_call_update),
     TEST_NO_TAG("Call with in-dialog codec change", call_with_in_dialog_codec_change),
@@ -7951,7 +8537,11 @@ static test_t call2_tests[] = {
     TEST_NO_TAG("Call with same codecs ordered differently", call_with_same_codecs_ordered_differently),
     TEST_NO_TAG("Call with audio stream added later on", call_with_audio_stream_added_later_on),
     TEST_NO_TAG("Simple call with display name", simple_call_with_display_name),
-    TEST_NO_TAG("Call with custom m line and crappy to header", call_with_custom_m_line),
+    TEST_NO_TAG("Call with custom m line and crappy to header", call_with_custom_m_line_and_crappy_to_header),
+    TEST_NO_TAG("Call with custom m line not encrypted", call_with_custom_m_line_not_encrypted),
+    TEST_NO_TAG("Call with crappy from and to headers", call_with_from_and_to_without_domain),
+    TEST_NO_TAG("Call with local account identity in request URI and not in to header",
+                call_with_correct_local_account_in_request_uri),
     TEST_NO_TAG("Call with tel uri", call_received_with_tel_uri),
     TEST_NO_TAG("Two accounts not sharing same connection", two_accounts_use_different_connections)};
 
@@ -7998,7 +8588,8 @@ static test_t call_not_established_tests[] = {
     TEST_NO_TAG("Call cancelled with reason", cancel_call_with_error),
     TEST_NO_TAG("Call declined, other ringing device receive CANCEL with reason", cancel_other_device_after_decline),
     TEST_NO_TAG("Call with malformed from", call_with_maformed_from),
-    TEST_NO_TAG("Call rejected with 403", call_rejected_with_403)};
+    TEST_NO_TAG("Call rejected with 403", call_rejected_with_403),
+    TEST_NO_TAG("Call with core without media", call_with_core_without_media)};
 
 test_suite_t call_test_suite = {"Single Call",
                                 NULL,

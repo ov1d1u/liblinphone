@@ -1,6 +1,6 @@
 ############################################################################
 # CMakeLists.txt
-# Copyright (c) 2010-2023 Belledonne Communications SARL.
+# Copyright (c) 2010-2024 Belledonne Communications SARL.
 #
 ############################################################################
 #
@@ -25,11 +25,18 @@ set(LINK_LIBS
 	${BCToolbox_TARGET}
 	${Belr_TARGET}
 )
-set(PUBLIC_LINK_LIBS
-	${Ortp_TARGET}
-	${Mediastreamer2_TARGET}
-	${BelleSIP_TARGET}
-)
+if(ANDROID_BUNDLED)
+	set(PUBLIC_LINK_LIBS
+		${Ortp_TARGET}
+		${BelleSIP_TARGET}
+	)
+else()
+	set(PUBLIC_LINK_LIBS
+		${Ortp_TARGET}
+		${Mediastreamer2_TARGET}
+		${BelleSIP_TARGET}
+	)
+endif()
 
 #APPLE_LIBS is mandatory for apple compilation
 if(APPLE)
@@ -98,6 +105,16 @@ endif()
 if(TurboJpeg_FOUND)
 	list(APPEND LINK_LIBS ${TurboJpeg_TARGET})
 endif()
+if(MsAaudio_FOUND)
+	list(APPEND LINK_LIBS ${MsAaudio_TARGET})
+endif()
+if(MsAndroidCamera2_FOUND)
+	list(APPEND LINK_LIBS ${MsAndroidCamera2_TARGET})
+endif()
+if(MsWebRtc_FOUND)
+	list(APPEND LINK_LIBS ${MsWebRtc_TARGET})
+endif()
+
 
 #define log domain for this part of code
 add_definitions(-DBCTBX_LOG_DOMAIN="liblinphone")
@@ -117,6 +134,7 @@ set(LINPHONE_CXX_OBJECTS_PRIVATE_HEADER_FILES
 	auth-info/auth-info.h
 	auth-info/auth-stack.h
 	auth-info/bearer-token.h
+	buffer/buffer.h
 	c-wrapper/c-wrapper.h
 	c-wrapper/list-holder.h
 	c-wrapper/internal/c-sal.h
@@ -164,6 +182,7 @@ set(LINPHONE_CXX_OBJECTS_PRIVATE_HEADER_FILES
 	conference/conference-params-interface.h
 	conference/conference-enums.h
 	conference/conference-id.h
+	conference/conference-id-params.h
 	conference/conference-info.h
 	conference/conference-scheduler.h
 	conference/sip-conference-scheduler.h
@@ -171,6 +190,7 @@ set(LINPHONE_CXX_OBJECTS_PRIVATE_HEADER_FILES
 	conference/conference-listener.h
 	conference/notify-conference-listener.h
 	conference/conference.h
+	conference/conference-context.h
 	conference/server-conference.h
 	conference/params/call-session-params-p.h
 	conference/params/call-session-params.h
@@ -285,8 +305,9 @@ set(LINPHONE_CXX_OBJECTS_PRIVATE_HEADER_FILES
 	sal/offeranswer.h
 	sal/potential_config_graph.h
 	search/search-async-data.h
-	search/magic-search-p.h
+	search/magic-search-plugin.h
 	search/magic-search.h
+	search/remote-contact-directory.h
 	search/search-request.h
 	search/search-result.h
 	signal-information/signal-information.h
@@ -298,6 +319,7 @@ set(LINPHONE_CXX_OBJECTS_PRIVATE_HEADER_FILES
 	utils/xml-utils.h
 	variant/variant.h
 	variant/variant-impl.h
+	vcard/carddav-params.h
 	vcard/vcard.h
 	vcard/vcard-context.h
 	xml/patch-ops.h
@@ -334,6 +356,7 @@ if(ENABLE_LDAP)
 		ldap/ldap-contact-fields.h
 		ldap/ldap-contact-provider.h
 		ldap/ldap-contact-search.h
+		ldap/ldap-magic-search-plugin.h
 		)
 endif()
 
@@ -354,6 +377,7 @@ if(ENABLE_VCARD)
 		vcard/carddav-context.h
 		vcard/carddav-query.h
 		vcard/carddav-response.h
+		vcard/carddav-magic-search-plugin.h
 	)
 endif()
 
@@ -376,6 +400,7 @@ set(LINPHONE_CXX_OBJECTS_SOURCE_FILES
 	auth-info/auth-info.cpp
 	auth-info/auth-stack.cpp
 	auth-info/bearer-token.cpp
+	buffer/buffer.cpp
 	c-wrapper/c-wrapper.cpp
 	c-wrapper/api/c-digest-authentication-policy.cpp
 	c-wrapper/api/c-account.cpp
@@ -390,11 +415,13 @@ set(LINPHONE_CXX_OBJECTS_SOURCE_FILES
 	c-wrapper/api/c-alert.cpp
 	c-wrapper/api/c-audio-device.cpp
 	c-wrapper/api/c-auth-info.cpp
+	c-wrapper/api/c-buffer.cpp
 	c-wrapper/api/c-call-cbs.cpp
 	c-wrapper/api/c-call-log.cpp
 	c-wrapper/api/c-call-params.cpp
 	c-wrapper/api/c-call-stats.cpp
 	c-wrapper/api/c-call.cpp
+	c-wrapper/api/c-carddav-params.cpp
 	c-wrapper/api/c-chat-message-cbs.cpp
 	c-wrapper/api/c-chat-message-reaction.cpp
 	c-wrapper/api/c-chat-message.cpp
@@ -439,6 +466,7 @@ set(LINPHONE_CXX_OBJECTS_SOURCE_FILES
 	c-wrapper/api/c-push-notification-config.cpp
 	c-wrapper/api/c-recorder.cpp
 	c-wrapper/api/c-recorder-params.cpp
+	c-wrapper/api/c-remote-contact-directory.cpp
 	c-wrapper/api/c-search-result.cpp
 	c-wrapper/api/c-signal-information.cpp
 	c-wrapper/api/c-video-source-descriptor.cpp
@@ -463,6 +491,8 @@ set(LINPHONE_CXX_OBJECTS_SOURCE_FILES
 	chat/chat-room/chat-params.cpp
 	chat/encryption/encryption-engine.cpp
 	chat/encryption/legacy-encryption-engine.cpp
+	chat/ics/ics.cpp
+	chat/ics/parser/ics-parser.cpp
 	chat/modifier/encryption-chat-message-modifier.cpp
 	chat/modifier/file-transfer-chat-message-modifier.cpp
 	chat/modifier/multipart-chat-message-modifier.cpp
@@ -472,9 +502,11 @@ set(LINPHONE_CXX_OBJECTS_SOURCE_FILES
 	conference/conference-params-interface.cpp
 	conference/conference-enums.cpp
 	conference/conference-id.cpp
+	conference/conference-id-params.cpp
 	conference/conference-info.cpp
 	conference/conference-scheduler.cpp
 	conference/conference.cpp
+	conference/conference-context.cpp
 	conference/conference-interface.cpp
 	conference/sip-conference-scheduler.cpp
 	conference/ccmp-conference-scheduler.cpp
@@ -595,6 +627,7 @@ set(LINPHONE_CXX_OBJECTS_SOURCE_FILES
 	utils/if-addrs.cpp
 	utils/xml-utils.cpp
 	utils/version.cpp
+	vcard/carddav-params.cpp
 	vcard/vcard.cpp
 	vcard/vcard-context.cpp
 	xml/patch-ops.cpp
@@ -609,6 +642,7 @@ if(ENABLE_LDAP)
 		ldap/ldap-contact-fields.cpp
 		ldap/ldap-contact-provider.cpp
 		ldap/ldap-contact-search.cpp
+		ldap/ldap-magic-search-plugin.cpp
 		)
 endif()
 
@@ -623,6 +657,7 @@ if(ENABLE_VCARD)
 	list(APPEND LINPHONE_CXX_OBJECTS_SOURCE_FILES
 		vcard/carddav-context.cpp
 		vcard/carddav-query.cpp
+		vcard/carddav-magic-search-plugin.cpp
 	)
 endif()
 
@@ -661,8 +696,6 @@ if(ENABLE_ADVANCED_IM)
 		chat/cpim/header/cpim-header.cpp
 		chat/cpim/message/cpim-message.cpp
 		chat/cpim/parser/cpim-parser.cpp
-		chat/ics/ics.cpp
-		chat/ics/parser/ics-parser.cpp
 	)
 	list(APPEND LINPHONE_CXX_OBJECTS_PRIVATE_HEADER_FILES chat/encryption/lime-x3dh-server-engine.h)
 	list(APPEND LINPHONE_CXX_OBJECTS_SOURCE_FILES chat/encryption/lime-x3dh-server-engine.cpp)
@@ -711,6 +744,13 @@ set(LINPHONE_CXX_OBJECTS_INCLUDE_DIRS
 	${LIBXSD_INCLUDE_DIRS}
 )
 
+if(APPLE)
+	list(APPEND LINPHONE_OBJC_SOURCE_FILES
+		utils/time-utils.mm
+		utils/time-utils.h
+	)
+endif()
+
 set(LINPHONE_PRIVATE_HEADER_FILES)
 foreach (header ${LINPHONE_CXX_OBJECTS_PRIVATE_HEADER_FILES})
 	list(APPEND LINPHONE_PRIVATE_HEADER_FILES "${CMAKE_CURRENT_SOURCE_DIR}/${header}")
@@ -725,9 +765,11 @@ endif()
 
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU"
 		AND CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL 12
-		AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS 15)
+		AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS 16)
 	set_source_files_properties(sal/potential_config_graph.cpp
+			nat/nat-policy.cpp
 			utils/version.cpp
+			search/magic-search.cpp
 			PROPERTIES COMPILE_OPTIONS "-Wno-error=maybe-uninitialized")
 endif()
 
@@ -779,10 +821,19 @@ target_include_directories(liblinphone PUBLIC
 	$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/src/>
 	PRIVATE ${LINPHONE_INCLUDE_DIRS} ${LINPHONE_CXX_OBJECTS_INCLUDE_DIRS}
 )
-target_link_libraries(liblinphone
-	PUBLIC ${PUBLIC_LINK_LIBS}
-	PRIVATE ${LINK_LIBS}
-)
+if(ANDROID_BUNDLED)
+	# Keep JNI symbols from the mediastreamer2 static lib
+	target_link_libraries(liblinphone
+		PUBLIC ${PUBLIC_LINK_LIBS}
+		PUBLIC -Wl,--whole-archive ${Mediastreamer2_TARGET} -Wl,--no-whole-archive
+		PRIVATE ${LINK_LIBS}
+	)
+else()
+	target_link_libraries(liblinphone
+		PUBLIC ${PUBLIC_LINK_LIBS}
+		PRIVATE ${LINK_LIBS}
+	)
+endif()
 if(WIN32 AND NOT CMAKE_SYSTEM_NAME STREQUAL "WindowsStore")
 	target_link_libraries(liblinphone PUBLIC "Ws2_32" "Iphlpapi" "user32")
 endif()

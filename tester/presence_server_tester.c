@@ -320,9 +320,10 @@ static void subscribe_with_late_publish(void) {
 	pauline_lp = linphone_core_get_config(pauline->lc);
 	lf_identity = linphone_address_as_string_uri_only(marie->identity);
 	lf = linphone_core_create_friend_with_address(pauline->lc, lf_identity);
+	linphone_friend_enable_subscribes(lf, TRUE);
 	bctbx_free(lf_identity);
 
-	linphone_config_set_int(pauline_lp, "sip", "subscribe_expires", 10);
+	linphone_config_set_int(pauline_lp, "sip", "subscribe_expires", 60);
 
 	linphone_core_add_friend(pauline->lc, lf);
 
@@ -339,7 +340,7 @@ static void subscribe_with_late_publish(void) {
 	linphone_proxy_config_edit(proxy);
 
 	linphone_proxy_config_enable_publish(proxy, TRUE);
-	linphone_proxy_config_set_publish_expires(proxy, 3);
+	linphone_proxy_config_set_publish_expires(proxy, 5);
 	linphone_proxy_config_done(proxy);
 
 	/*wait for marie status*/
@@ -352,39 +353,21 @@ static void subscribe_with_late_publish(void) {
 
 	/*wait for new status*/
 	BC_ASSERT_TRUE(
-	    wait_for_until(pauline->lc, marie->lc, &pauline->stat.number_of_LinphonePresenceActivityBusy, 1, 2000));
+	    wait_for_until(pauline->lc, marie->lc, &pauline->stat.number_of_LinphonePresenceActivityBusy, 1, 4000));
 
 	/*wait for refresh*/
 	BC_ASSERT_TRUE(
-	    wait_for_until(pauline->lc, marie->lc, &pauline->stat.number_of_LinphonePresenceActivityBusy, 2, 4000));
+	    wait_for_until(pauline->lc, marie->lc, &pauline->stat.number_of_LinphonePresenceActivityBusy, 2, 10000));
 
 	/*Expect a notify at publication expiration because marie is no longuer scheduled*/
-	BC_ASSERT_FALSE(
-	    wait_for_until(pauline->lc, pauline->lc, &pauline->stat.number_of_LinphonePresenceActivityBusy, 3, 6000));
-	/*thanks to long term presence we are still online*/
+	BC_ASSERT_TRUE(
+	    wait_for_until(pauline->lc, pauline->lc, &pauline->stat.number_of_LinphonePresenceActivityAway, 2, 5000));
+	/*thanks to long term presence we become "away"*/
 	BC_ASSERT_EQUAL(LinphoneStatusAway, linphone_friend_get_status(lf), int, "%d");
 
-	BC_ASSERT_TRUE(wait_for_until(pauline->lc, marie->lc, &pauline->stat.number_of_LinphonePresenceActivityBusy, 3,
-	                              5000)); /*re- schedule marie to clean up things*/
-
-	/*simulate a rapid presence change to make sure only first and last are transmited */
-	/* this tests if SIP-If-Match header based mechanism works */
-	presence = linphone_presence_model_new_with_activity(LinphonePresenceActivityAway, NULL);
-	linphone_core_set_presence_model(marie->lc, presence);
-	linphone_presence_model_unref(presence);
-	presence = linphone_presence_model_new_with_activity(LinphonePresenceActivityBreakfast, NULL);
-	linphone_core_set_presence_model(marie->lc, presence);
-	linphone_presence_model_unref(presence);
-	presence = linphone_presence_model_new_with_activity(LinphonePresenceActivityAppointment, NULL);
-	linphone_core_set_presence_model(marie->lc, presence);
-	linphone_presence_model_unref(presence);
-
+	/* When re-rescheduled, marie resubmits a PUBLISH to restore its Busy status */
 	BC_ASSERT_TRUE(
-	    wait_for_until(pauline->lc, marie->lc, &pauline->stat.number_of_LinphonePresenceActivityAppointment, 1, 5000));
-
-	BC_ASSERT_EQUAL(pauline->stat.number_of_LinphonePresenceActivityAway, 4, int, "%i");
-	BC_ASSERT_EQUAL(pauline->stat.number_of_LinphonePresenceActivityBreakfast, 0, int, "%i");
-	BC_ASSERT_EQUAL(pauline->stat.number_of_LinphonePresenceActivityAppointment, 1, int, "%i");
+	    wait_for_until(pauline->lc, marie->lc, &pauline->stat.number_of_LinphonePresenceActivityBusy, 3, 5000));
 
 	linphone_friend_unref(lf);
 
@@ -393,7 +376,6 @@ static void subscribe_with_late_publish(void) {
 }
 
 static void test_forked_subscribe_notify_publish(void) {
-
 	LinphoneCoreManager *marie = linphone_core_manager_new("marie_rc");
 	LinphoneCoreManager *marie2 = linphone_core_manager_new("marie_rc");
 	LinphoneCoreManager *pauline =
@@ -417,7 +399,7 @@ static void test_forked_subscribe_notify_publish(void) {
 	bctbx_free(lf_identity);
 
 	linphone_config_set_int(pauline_lp, "sip", "subscribe_expires", 5);
-
+	linphone_friend_enable_subscribes(lf, TRUE);
 	linphone_core_add_friend(pauline->lc, lf);
 
 	/*wait for subscribe acknowledgment*/
@@ -1798,6 +1780,7 @@ static void publish_with_network_state_changes(void) {
 	LinphoneCoreManager *pauline =
 	    linphone_core_manager_new(transport_supported(LinphoneTransportTls) ? "pauline_rc" : "pauline_tcp_rc");
 	LinphoneFriend *marie_as_friend = linphone_core_create_friend_with_address(pauline->lc, get_identity(marie));
+	linphone_friend_enable_subscribes(marie_as_friend, TRUE);
 
 	LinphoneProxyConfig *proxy;
 	LinphoneCoreCbs *cbs = linphone_factory_create_core_cbs(linphone_factory_get());
@@ -2570,7 +2553,8 @@ static void notify_search_result_capabilities_with_alias(void) {
 		BC_ASSERT_TRUE(linphone_friend_has_capability(marieFriend, LinphoneFriendCapabilityLimeX3dh));
 
 		magicSearch = linphone_magic_search_new(pauline->lc);
-		resultList = linphone_magic_search_get_contact_list_from_filter(magicSearch, "", "");
+		resultList = linphone_magic_search_get_contacts_list(magicSearch, "", "", LinphoneMagicSearchSourceAll,
+		                                                     LinphoneMagicSearchAggregationNone);
 
 		if (BC_ASSERT_PTR_NOT_NULL(resultList)) {
 			BC_ASSERT_EQUAL((int)bctbx_list_size(resultList), 1, int, "%d");

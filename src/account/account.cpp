@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010-2022 Belledonne Communications SARL.
+ * Copyright (c) 2010-2025 Belledonne Communications SARL.
  *
  * This file is part of Liblinphone
  * (see https://gitlab.linphone.org/BC/public/liblinphone).
@@ -22,11 +22,14 @@
 
 #include "account.h"
 
+#include "chat/ics/ics.h"
+#include "conference/client-conference.h"
 #include "content/content.h"
 #include "core/core.h"
 #include "linphone/api/c-account-params.h"
 #include "linphone/api/c-account.h"
 #include "linphone/api/c-address.h"
+#include "linphone/utils/algorithm.h"
 #include "push-notification/push-notification-config.h"
 #ifdef HAVE_ADVANCED_IM
 #ifdef HAVE_LIME_X3DH
@@ -43,6 +46,8 @@
 #include "presence/presence-service.h"
 #include "private.h"
 #include "utils/custom-params.h"
+#include "utils/xml-utils.h"
+#include "xml/xcon-ccmp.h"
 
 // =============================================================================
 
@@ -50,22 +55,26 @@ using namespace std;
 
 LINPHONE_BEGIN_NAMESPACE
 
+using namespace Xsd::XconCcmp;
+using namespace Xsd::XconConferenceInfo;
+
 Account::Account(LinphoneCore *lc, std::shared_ptr<AccountParams> params)
     : CoreAccessor(lc ? L_GET_CPP_PTR_FROM_C_OBJECT(lc) : nullptr) {
 	mParams = params;
 	mMissedCalls = 0;
 	applyParamsChanges();
-	lInfo() << "Account [" << this << "] created with params";
+	lInfo() << *this << " created with params";
 }
 
 Account::Account(LinphoneCore *lc, std::shared_ptr<AccountParams> params, LinphoneProxyConfig *config)
     : Account(lc, params) {
 	setConfig(config, false);
-	lInfo() << "Account [" << this << "] created with params and proxy config";
+	lInfo() << *this << " created with params and proxy config";
 }
 
 Account::~Account() {
-	lInfo() << "Account [" << this << "] destroyed";
+	lInfo() << *this << " destroyed";
+	cancelDeletion();
 	if (mSentHeaders) sal_custom_header_free(mSentHeaders);
 	setDependency(nullptr);
 	if (mErrorInfo) linphone_error_info_unref(mErrorInfo);
@@ -118,15 +127,15 @@ bool Account::computePublishParamsHash() {
 	belle_sip_auth_helper_compute_ha1(source.c_str(), "dummy", "dummy", hash);
 	saved = hash[16];
 	hash[16] = '\0';
-	mPreviousPublishParamsHash[0] = strtoull(hash, (char **)NULL, 16);
+	mPreviousPublishParamsHash[0] = strtoull(hash, (char **)nullptr, 16);
 	hash[16] = saved;
-	mPreviousPublishParamsHash[1] = strtoull(&hash[16], (char **)NULL, 16);
+	mPreviousPublishParamsHash[1] = strtoull(&hash[16], (char **)nullptr, 16);
 	return previous_hash[0] != mPreviousPublishParamsHash[0] || previous_hash[1] != mPreviousPublishParamsHash[1];
 }
 
 LinphoneAccountAddressComparisonResult Account::compareLinphoneAddresses(const std::shared_ptr<const Address> &a,
                                                                          const std::shared_ptr<const Address> &b) {
-	if (a == NULL && b == NULL) return LinphoneAccountAddressEqual;
+	if (a == nullptr && b == nullptr) return LinphoneAccountAddressEqual;
 	else if (!a || !b) return LinphoneAccountAddressDifferent;
 
 	if (*a == *b) return LinphoneAccountAddressEqual;
@@ -142,12 +151,12 @@ LinphoneAccountAddressComparisonResult Account::compareLinphoneAddresses(const s
 LinphoneAccountAddressComparisonResult Account::isServerConfigChanged(std::shared_ptr<AccountParams> oldParams,
                                                                       std::shared_ptr<AccountParams> newParams) {
 	std::shared_ptr<Address> oldProxy =
-	    oldParams != nullptr && !oldParams->mProxy.empty() ? Address::create(oldParams->mProxy) : NULL;
-	std::shared_ptr<Address> newProxy = !newParams->mProxy.empty() ? Address::create(newParams->mProxy) : NULL;
+	    oldParams != nullptr && !oldParams->mProxy.empty() ? Address::create(oldParams->mProxy) : nullptr;
+	std::shared_ptr<Address> newProxy = !newParams->mProxy.empty() ? Address::create(newParams->mProxy) : nullptr;
 	LinphoneAccountAddressComparisonResult result_identity;
 	LinphoneAccountAddressComparisonResult result;
 
-	result = compareLinphoneAddresses(oldParams != nullptr ? oldParams->mIdentityAddress : NULL,
+	result = compareLinphoneAddresses(oldParams != nullptr ? oldParams->mIdentityAddress : nullptr,
 	                                  newParams->mIdentityAddress);
 	if (result == LinphoneAccountAddressDifferent) goto end;
 	result_identity = result;
@@ -232,7 +241,9 @@ void Account::applyParamsChanges() {
 
 	if (mOldParams == nullptr || mOldParams->mLimeServerUrl != mParams->mLimeServerUrl) {
 		onLimeServerUrlChanged(mParams->mLimeServerUrl);
-		mRegisterChanged = true;
+	}
+	if (mOldParams == nullptr || mOldParams->mLimeAlgo != mParams->mLimeAlgo) {
+		onLimeAlgoChanged(mParams->mLimeAlgo);
 	}
 
 	if (mOldParams == nullptr || mOldParams->mRegisterEnabled != mParams->mRegisterEnabled ||
@@ -287,8 +298,39 @@ void Account::setNeedToRegister(bool needToRegister) {
 	}
 }
 
-void Account::setDeletionDate(time_t deletionDate) {
-	mDeletionDate = deletionDate;
+void Account::triggerDeletion() {
+	cancelDeletion();
+	weak_ptr<Account> weakZis = getSharedFromThis();
+	// Timeout is in ms
+	unsigned int accountDeletionTimeout = getCore()->getAccountDeletionTimeout() * 1000;
+	mDeletionTimer = getCore()->createTimer(
+	    [weakZis]() -> bool {
+		    auto zis = weakZis.lock();
+		    if (zis) {
+			    try {
+				    zis->getCore()->removeDeletedAccount(zis);
+			    } catch (const bad_weak_ptr &) {
+				    // ignored
+			    }
+		    }
+		    return false;
+	    },
+	    accountDeletionTimeout, "Account deletion");
+}
+
+void Account::cancelDeletion() {
+	if (mDeletionTimer) {
+		try {
+			getCore()->destroyTimer(mDeletionTimer);
+		} catch (const bad_weak_ptr &) {
+			// ignored.
+		}
+		mDeletionTimer = nullptr;
+	}
+}
+
+bool Account::deletionPending() const {
+	return mDeletionTimer != nullptr;
 }
 
 void Account::setSipEtag(const std::string &sipEtag) {
@@ -301,7 +343,9 @@ void Account::setErrorInfo(LinphoneErrorInfo *errorInfo) {
 
 void Account::setContactAddress(const std::shared_ptr<const Address> &contact) {
 	mContactAddress = nullptr;
-	if (contact) mContactAddress = contact->clone()->toSharedPtr();
+	if (contact) {
+		mContactAddress = contact->clone()->toSharedPtr();
+	}
 	setContactAddressWithoutParams(contact);
 }
 
@@ -366,18 +410,33 @@ void Account::updateDependentAccount(LinphoneRegistrationState state, const std:
 	}
 }
 
+void Account::handleDeletion() {
+	switch (mState) {
+		case LinphoneRegistrationOk:
+			unregister();
+			break;
+		case LinphoneRegistrationCleared:
+			cancelDeletion();
+			getCore()->removeDeletedAccount(getSharedFromThis());
+			break;
+		case LinphoneRegistrationNone:
+		default:
+			// In all other states, un-registration is aborted.
+			setState(LinphoneRegistrationNone, "Registration disabled");
+			break;
+	}
+}
+
 void Account::setState(LinphoneRegistrationState state, const std::string &message) {
-	auto core = getCCore();
-	if (mState != state ||
-	    state == LinphoneRegistrationOk) { /*allow multiple notification of LinphoneRegistrationOk for refreshing*/
+	/*allow multiple notification of LinphoneRegistrationOk for refreshing*/
+	if ((mState != state) || (state == LinphoneRegistrationOk)) {
+		auto core = getCCore();
 		const auto identity = (mParams) ? mParams->getIdentityAddress()->toString() : std::string("sip:");
-		if (!mParams) lWarning() << "AccountParams not set for Account [" << this << "]";
-		lInfo() << "Account [" << this << "] for identity [" << identity << "] moving from state ["
-		        << linphone_registration_state_to_string(mState) << "] to ["
+		if (!mParams) lWarning() << "AccountParams not set for " << *this;
+		lInfo() << *this << " moving from state [" << linphone_registration_state_to_string(mState) << "] to ["
 		        << linphone_registration_state_to_string(state) << "] on core [" << core << "]";
 		mIsUnregistering = false;
 		if (state == LinphoneRegistrationOk) {
-
 			const auto salAddr = mOp->getContactAddress();
 			if (salAddr) {
 				if (!mContactAddress) {
@@ -388,7 +447,7 @@ void Account::setState(LinphoneRegistrationState state, const std::string &messa
 			mOldParams = nullptr; // We can drop oldParams, since last registration was successful.
 		}
 
-		LinphoneRegistrationState previousState = mState;
+		mPreviousState = mState;
 		mState = state;
 		if (!mDependency) {
 			updateDependentAccount(state, message);
@@ -402,14 +461,19 @@ void Account::setState(LinphoneRegistrationState state, const std::string &messa
 		}
 
 		if (linphone_core_should_subscribe_friends_only_when_registered(core) && state == LinphoneRegistrationOk &&
-		    previousState != state) {
+		    mPreviousState != state) {
 			linphone_core_update_friends_subscriptions(core);
 		}
-		if (state == LinphoneRegistrationOk && previousState != state) {
+		if (state == LinphoneRegistrationOk && mPreviousState != state) {
 			subscribeToMessageWaitingIndication();
 		}
 
 		triggerUpdate();
+
+		if (deletionPending()) {
+			handleDeletion();
+		}
+
 	} else {
 		/*state already reported*/
 	}
@@ -470,10 +534,6 @@ int Account::getAuthFailure() const {
 
 bool Account::getRegisterChanged() const {
 	return mRegisterChanged;
-}
-
-time_t Account::getDeletionDate() const {
-	return mDeletionDate;
 }
 
 const std::string &Account::getSipEtag() const {
@@ -571,8 +631,8 @@ std::shared_ptr<Address> Account::guessContactForRegister() {
 
 		if (core && core->push_notification_enabled) {
 			if (!newParams->isPushNotificationAvailable()) {
-				lError() << "Couldn't compute automatic push notifications parameters on account [" << this
-				         << "] because account params do not have available push notifications";
+				lError() << "Couldn't compute automatic push notifications parameters on " << *this
+				         << " because account params do not have available push notifications";
 			} else if (newParams->mPushNotificationAllowed || newParams->mRemotePushNotificationAllowed) {
 				if (newParams->mPushNotificationConfig->getProvider().empty()) {
 					bool tester_env = !!linphone_config_get_int(core->config, "tester", "test_env", FALSE);
@@ -593,13 +653,13 @@ std::shared_ptr<Address> Account::guessContactForRegister() {
 				std::shared_ptr<Address> contactParamsWrapper =
 				    Address::create(string("sip:dummy;" + newParams->mContactUriParameters));
 				bool didRemoveParams = false;
-				for (auto pushParam : newParams->mPushNotificationConfig->getPushParamsMap()) {
+				for (const auto &pushParam : newParams->mPushNotificationConfig->getPushParamsMap()) {
 					string paramName = pushParam.first;
 					if (!contactParamsWrapper->getUriParamValue(paramName).empty()) {
 						contactParamsWrapper->removeUriParam(paramName);
 						didRemoveParams = true;
-						lError() << "Removing '" << paramName << "' from account [" << this
-						         << "] contact uri parameters because it will be generated automatically since core "
+						lError() << "Removing '" << paramName << "' from " << *this
+						         << " contact uri parameters because it will be generated automatically since core "
 						            "has push notification enabled";
 					}
 				}
@@ -613,8 +673,8 @@ std::shared_ptr<Address> Account::guessContactForRegister() {
 						}
 					}
 
-					lWarning() << "Account [" << this << "] contact uri parameters changed from '"
-					           << newParams->mContactUriParameters << "' to '" << newContactUriParams << "'";
+					lWarning() << *this << " contact uri parameters changed from '" << newParams->mContactUriParameters
+					           << "' to '" << newContactUriParams << "'";
 					newParams->mContactUriParameters = newContactUriParams;
 				}
 			}
@@ -643,7 +703,7 @@ std::shared_ptr<Address> Account::guessContactForRegister() {
 			}
 			lInfo() << "Added push notification informations '"
 			        << newParams->getPushNotificationConfig()->asString(mParams->mRemotePushNotificationAllowed)
-			        << "' added to account [" << this << "]";
+			        << "' added to " << *this;
 			setAccountParams(newParams);
 		}
 	}
@@ -675,15 +735,14 @@ std::list<SalAddress *> Account::getOtherContacts() {
 void Account::registerAccount() {
 	if (mParams->mRegisterEnabled) {
 		if (mParams->mProxyAddress == nullptr) {
-			lError() << "Can't register Account [" << this << "] without a proxy address";
+			lError() << "Can't register " << *this << " without a proxy address";
 			return;
 		}
 		if (mParams->mIdentityAddress == nullptr) {
-			lError() << "Can't register Account [" << this << "] without an identity address";
+			lError() << "Can't register " << *this << " without an identity address";
 			return;
 		}
-		lInfo() << "LinphoneAccount [" << this
-		        << "] about to register (LinphoneCore version: " << linphone_core_get_version() << ")";
+		lInfo() << *this << " about to register (LinphoneCore version: " << linphone_core_get_version() << ")";
 
 		if (mOp) mOp->release();
 		mOp = new SalRegisterOp(getCCore()->sal.get());
@@ -712,15 +771,12 @@ void Account::registerAccount() {
 	} else {
 		/* unregister if registered*/
 		unregister();
-		if (mState == LinphoneRegistrationProgress) {
-			setState(LinphoneRegistrationCleared, "Registration cleared");
-		}
 	}
 }
 
 void Account::refreshRegister() {
 	if (!mParams) {
-		lWarning() << "refreshRegister is called but no AccountParams is set on Account [" << this << "]";
+		lWarning() << "refreshRegister is called but no AccountParams is set on " << *this;
 		return;
 	}
 
@@ -736,11 +792,14 @@ void Account::pauseRegister() {
 }
 
 void Account::unregister() {
-	if (mOp &&
-	    (mState == LinphoneRegistrationOk || (mState == LinphoneRegistrationProgress && mParams->mExpires != 0))) {
-		unsubscribeFromMessageWaitingIndication();
-		mOp->unregister();
-		mIsUnregistering = true;
+	if (mOp) {
+		if (mState == LinphoneRegistrationOk || mState == LinphoneRegistrationFailed) {
+			unsubscribeFromChatRooms();
+			unsubscribeFromMessageWaitingIndication();
+			lInfo() << *this << " unregistering.";
+			mOp->unregister();
+			mIsUnregistering = true;
+		}
 	}
 }
 
@@ -851,7 +910,7 @@ LinphoneTransportType Account::getTransport() {
 
 bool Account::isAvpfEnabled() const {
 	if (!mParams) {
-		lWarning() << "isAvpfEnabled is called but no AccountParams is set on Account [" << this << "]";
+		lWarning() << "isAvpfEnabled is called but no AccountParams is set on " << *this;
 		return false;
 	}
 	auto core = getCCore();
@@ -865,7 +924,7 @@ bool Account::isAvpfEnabled() const {
 
 const LinphoneAuthInfo *Account::findAuthInfo() const {
 	if (!mParams) {
-		lWarning() << "findAuthInfo is called but no AccountParams is set on Account [" << this << "]";
+		lWarning() << "findAuthInfo is called but no AccountParams is set on " << *this;
 		return nullptr;
 	}
 
@@ -876,25 +935,40 @@ const LinphoneAuthInfo *Account::findAuthInfo() const {
 
 int Account::getUnreadChatMessageCount() const {
 	if (!mParams) {
-		lWarning() << "getUnreadMessageCount is called but no AccountParams is set on Account [" << this << "]";
+		lWarning() << "getUnreadMessageCount is called but no AccountParams is set on " << *this;
 		return -1;
 	}
 
 	return getCore()->getUnreadChatMessageCount(mParams->mIdentityAddress);
 }
 
+void Account::unsubscribeFromChatRooms() {
+	// Unsubscribe from chatrooms
+	lInfo() << "Unsubscribing from a chatrooms linked to account " << *this;
+	for (const auto &chatRoom : getChatRooms()) {
+		const auto &conference = chatRoom->getConference();
+		if (conference) {
+			const auto &clientConference = dynamic_pointer_cast<LinphonePrivate::ClientConference>(conference);
+			if (clientConference) {
+				clientConference->unsubscribe();
+			}
+		}
+	}
+	mChatRoomList.mList.clear();
+}
+
 void Account::updateChatRoomList() const {
 	list<shared_ptr<AbstractChatRoom>> results;
 	if (!mParams) {
-		lWarning() << "updateChatRoomList is called but no AccountParams is set on Account [" << this << "]";
-		mChatRoomList.mList = list<shared_ptr<AbstractChatRoom>>();
+		lWarning() << "getChatRooms is called but no AccountParams is set on " << *this;
+		mChatRoomList.mList.clear();
 		return;
 	}
 
 	auto localAddress = mParams->mIdentityAddress;
 	const list<shared_ptr<AbstractChatRoom>> chatRooms = getCore()->getChatRooms();
-	for (auto chatRoom : chatRooms) {
-		if (localAddress->weakEqual(*chatRoom->getLocalAddress())) {
+	for (const auto &chatRoom : chatRooms) {
+		if (localAddress->weakEqual(chatRoom->getLocalAddress())) {
 			results.push_back(chatRoom);
 		}
 	}
@@ -911,7 +985,7 @@ const bctbx_list_t *Account::getChatRoomsCList() const {
 	return mChatRoomList.getCList();
 }
 
-const list<shared_ptr<AbstractChatRoom>> Account::filterChatRooms(const string &filter) const {
+list<shared_ptr<AbstractChatRoom>> Account::filterChatRooms(const string &filter) const {
 	updateChatRoomList();
 	if (filter.empty()) {
 		return mChatRoomList.mList;
@@ -991,9 +1065,8 @@ void Account::setMissedCallsCount(int count) {
 
 list<shared_ptr<CallLog>> Account::getCallLogs() const {
 	if (!mParams) {
-		lWarning() << "getCallLogs is called but no AccountParams is set on Account [" << this << "]";
-		list<shared_ptr<CallLog>> callLogs;
-		return callLogs;
+		lWarning() << "getCallLogs is called but no AccountParams is set on " << *this;
+		return {};
 	}
 
 	if (linphone_core_get_global_state(getCore()->getCCore()) != LinphoneGlobalOn) {
@@ -1008,9 +1081,8 @@ list<shared_ptr<CallLog>> Account::getCallLogs() const {
 
 list<shared_ptr<CallLog>> Account::getCallLogsForAddress(const std::shared_ptr<const Address> &remoteAddress) const {
 	if (!mParams) {
-		lWarning() << "getCallLogsForAddress is called but no AccountParams is set on Account [" << this << "]";
-		list<shared_ptr<CallLog>> callLogs;
-		return callLogs;
+		lWarning() << "getCallLogsForAddress is called but no AccountParams is set on " << *this;
+		return {};
 	}
 
 	if (linphone_core_get_global_state(getCore()->getCCore()) != LinphoneGlobalOn) {
@@ -1025,12 +1097,12 @@ list<shared_ptr<CallLog>> Account::getCallLogsForAddress(const std::shared_ptr<c
 
 void Account::deleteCallLogs() const {
 	if (!mParams) {
-		lWarning() << "deleteCallLogs is called but no AccountParams is set on Account [" << this << "]";
+		lWarning() << "deleteCallLogs is called but no AccountParams is set on " << *this;
 		return;
 	}
 
 	if (linphone_core_get_global_state(getCore()->getCCore()) != LinphoneGlobalOn) {
-		lWarning() << "deleteCallLogs is called but core is not running on Account [" << this << "]";
+		lWarning() << "deleteCallLogs is called but core is not running on " << *this;
 		return;
 	}
 
@@ -1041,9 +1113,8 @@ void Account::deleteCallLogs() const {
 
 list<shared_ptr<ConferenceInfo>> Account::getConferenceInfos(const std::list<LinphoneStreamType> capabilities) const {
 	if (!mParams) {
-		lWarning() << "getConferenceInfos is called but no AccountParams is set on Account [" << this << "]";
-		list<shared_ptr<ConferenceInfo>> conferences;
-		return conferences;
+		lWarning() << "getConferenceInfos is called but no AccountParams is set on " << *this;
+		return {};
 	}
 
 	if (linphone_core_get_global_state(getCore()->getCCore()) != LinphoneGlobalOn) {
@@ -1053,7 +1124,25 @@ list<shared_ptr<ConferenceInfo>> Account::getConferenceInfos(const std::list<Lin
 
 	auto localAddress = mParams->mIdentityAddress;
 	unique_ptr<MainDb> &mainDb = getCore()->getPrivate()->mainDb;
-	return mainDb->getConferenceInfosWithParticipant(localAddress, capabilities);
+	mConferenceInfos = mainDb->getConferenceInfosWithParticipant(localAddress, capabilities);
+
+	const auto ccmpServerUrl = mParams->getCcmpServerUrl();
+	if (!ccmpServerUrl.empty()) {
+		updateConferenceInfoListWithCcmp();
+	}
+	// At first, the list of locally stored conferences is returned.
+	// The updated list will be available upon receiving the notification that the conference information list has been
+	// updated (callback: conference_information_updated)
+	return mConferenceInfos;
+}
+
+void Account::addConferenceInfo(const std::shared_ptr<ConferenceInfo> &info) {
+	auto it = std::find_if(mConferenceInfos.begin(), mConferenceInfos.end(),
+	                       [&info](const auto &cachedInfo) { return *info->getUri() == *cachedInfo->getUri(); });
+	if (it != mConferenceInfos.end()) {
+		mConferenceInfos.erase(it);
+	}
+	mConferenceInfos.push_back(info);
 }
 
 void Account::writeAllToConfigFile(const std::shared_ptr<Core> core) {
@@ -1081,7 +1170,7 @@ void Account::writeAllToConfigFile(const std::shared_ptr<Core> core) {
 void Account::writeToConfigFile(LpConfig *config, const std::shared_ptr<Account> &account, int index) {
 	char key[50];
 
-	sprintf(key, "proxy_%i", index);
+	snprintf(key, sizeof(key), "proxy_%i", index);
 	linphone_config_clean_section(config, key);
 	if (account == nullptr) {
 		return;
@@ -1092,7 +1181,7 @@ void Account::writeToConfigFile(LpConfig *config, const std::shared_ptr<Account>
 
 void Account::writeToConfigFile(int index) {
 	if (!mParams) {
-		lWarning() << "writeToConfigFile is called but no AccountParams is set on Account [" << this << "]";
+		lWarning() << "writeToConfigFile is called but no AccountParams is set on " << *this;
 		return;
 	}
 
@@ -1115,6 +1204,11 @@ bool Account::canRegister() {
 	if (mDependency) {
 		return mDependency->getState() == LinphoneRegistrationOk;
 	}
+	if (getState() == LinphoneRegistrationNone && deletionPending()) {
+		// Account is removed, but never registered before.
+		// This case happens when doing a removeAccount() while network is off.
+		return false;
+	}
 	return true;
 }
 
@@ -1128,10 +1222,10 @@ int Account::done() {
 		if (mOp) {
 			if (res == LinphoneAccountAddressDifferent) {
 				unregister();
+				mOp->setUserPointer(nullptr); /*we don't want to receive status for this un register*/
+				mOp->unref();                 /*but we keep refresher to handle authentication if needed*/
+				mOp = nullptr;
 			}
-			mOp->setUserPointer(NULL); /*we don't want to receive status for this un register*/
-			mOp->unref();              /*but we keep refresher to handle authentication if needed*/
-			mOp = nullptr;
 		}
 		if (mPresencePublishEvent) {
 			if (res == LinphoneAccountAddressDifferent) {
@@ -1146,19 +1240,20 @@ int Account::done() {
 		mRegisterChanged = false;
 	}
 
-	if (mNeedToRegister) {
-		pauseRegister();
-	}
+	// if (mNeedToRegister) {
+	//	pauseRegister();
+	// }
 
 	if (computePublishParamsHash()) {
-		lInfo() << "Publish params have changed on account [" << this << "]";
+		lInfo() << "Publish params have changed on " << *this;
+
 		if (mPresencePublishEvent) {
 			/*publish is terminated*/
 			mPresencePublishEvent->terminate();
 		}
 		if (mParams->mPublishEnabled) setSendPublish(true);
 	} else {
-		lInfo() << "Publish params have not changed on account [" << this << "]";
+		lInfo() << "Publish params have not changed on " << *this;
 	}
 
 	try {
@@ -1185,7 +1280,7 @@ void Account::update() {
 	    mLimeUserAccountStatus == LimeUserAccountStatus::LimeUserAccountNeedCreation) {
 		shared_ptr<Address> addr = mContactAddress;
 		if (!addr) {
-			shared_ptr<Address> sip = getAccountParams()->getIdentityAddress();
+			shared_ptr<const Address> sip = getAccountParams()->getIdentityAddress();
 			if (sip) {
 				auto gr = getCCore()->sal->getUuid();
 				if (gr.empty()) return;
@@ -1236,13 +1331,13 @@ void Account::apply(LinphoneCore *lc) {
 	done();
 }
 
-shared_ptr<EventPublish> Account::createPublish(const std::string event, int expires) {
+shared_ptr<EventPublish> Account::createPublish(const std::string &event, int expires) {
 	if (!getCore()) {
-		lError() << "Cannot create publish from account [" << this << "] not attached to any core";
+		lError() << "Cannot create publish from " << *this << " not attached to any core";
 		return nullptr;
 	}
 	return dynamic_pointer_cast<EventPublish>(
-	    (new EventPublish(getCore(), getSharedFromThis(), NULL, event, expires))->toSharedPtr());
+	    (new EventPublish(getCore(), getSharedFromThis(), nullptr, event, expires))->toSharedPtr());
 }
 
 void Account::setPresenceModel(LinphonePresenceModel *presence) {
@@ -1284,7 +1379,7 @@ int Account::sendPublish() {
 			mPresencePublishEvent->setManualRefresherMode(true);
 		}
 		const auto &identityAddress = mParams->getIdentityAddress();
-		mPresencePublishEvent->setUserData(identityAddress->toC());
+		mPresencePublishEvent->setUserData(this);
 
 		LinphoneConfig *config = linphone_core_get_config(getCCore());
 		if (linphone_config_get_bool(config, "sip", "update_presence_model_timestamp_before_publish_expires_refresh",
@@ -1297,7 +1392,7 @@ int Account::sendPublish() {
 			}
 		}
 
-		if (linphone_presence_model_get_presentity(mPresenceModel) == NULL) {
+		if (linphone_presence_model_get_presentity(mPresenceModel) == nullptr) {
 			lInfo() << "No presentity set for model [" << mPresenceModel << "], using identity from account [" << this
 			        << "]: " << *identityAddress;
 			linphone_presence_model_set_presentity(mPresenceModel, identityAddress->toC());
@@ -1305,7 +1400,7 @@ int Account::sendPublish() {
 
 		const auto currentPresentity = linphone_presence_model_get_presentity(mPresenceModel);
 		std::shared_ptr<const Address> presentityAddress = nullptr;
-		char *contact = NULL;
+		char *contact = nullptr;
 		if (!linphone_address_equal(currentPresentity, identityAddress->toC())) {
 			lInfo() << "Presentity for model [" << mPresenceModel << "] differs account [" << this
 			        << "], using account " << *identityAddress;
@@ -1314,7 +1409,7 @@ int Account::sendPublish() {
 				contact = bctbx_strdup(linphone_presence_model_get_contact(mPresenceModel));
 			}
 			linphone_presence_model_set_presentity(mPresenceModel, identityAddress->toC());
-			linphone_presence_model_set_contact(mPresenceModel, NULL); /*it will be automatically computed*/
+			linphone_presence_model_set_contact(mPresenceModel, nullptr); /*it will be automatically computed*/
 		}
 
 		char *presence_body;
@@ -1355,11 +1450,11 @@ int Account::sendPublish() {
 
 bool Account::check() {
 	if (mParams->mProxy.empty()) {
-		lWarning() << "No proxy given for account " << this;
+		lWarning() << "No proxy given for " << *this;
 		return false;
 	}
-	if (mParams->mIdentityAddress == NULL) {
-		lWarning() << "Identity address of account " << this << " has not been set";
+	if (mParams->mIdentityAddress == nullptr) {
+		lWarning() << "Identity address of " << *this << " has not been set";
 		return false;
 	}
 	resolveDependencies();
@@ -1398,7 +1493,7 @@ void Account::resolveDependencies() {
 			}
 		}
 		if (!dependsOn.empty() && dependency == nullptr) {
-			if (dependentAccount == NULL) {
+			if (dependentAccount == nullptr) {
 				lWarning() << "Account marked as dependent but no account found for idkey [" << dependsOn << "]";
 				return;
 			} else {
@@ -1414,7 +1509,7 @@ std::shared_ptr<Event> Account::getMwiEvent() const {
 }
 
 void Account::subscribeToMessageWaitingIndication() {
-	const std::shared_ptr<Address> &mwiServerAddress = mParams->getMwiServerAddress();
+	std::shared_ptr<const Address> mwiServerAddress = mParams->getMwiServerAddress();
 	if (mwiServerAddress) {
 		int expires = linphone_config_get_int(getCore()->getCCore()->config, "sip", "mwi_expires", 86400);
 		if (mMwiEvent) mMwiEvent->terminate();
@@ -1591,6 +1686,7 @@ void Account::onLimeServerUrlChanged(const std::string &limeServerUrl) {
 		if (remove) {
 			linphone_core_remove_linphone_spec(core, "lime");
 		}
+		return;
 	}
 
 	// If the lime server URL has changed, then propagate the change to the encryption engine
@@ -1604,11 +1700,429 @@ void Account::onLimeServerUrlChanged(const std::string &limeServerUrl) {
 	lWarning() << "Lime X3DH support is not available";
 #endif
 }
+void Account::onLimeAlgoChanged(const std::string &limeAlgo) {
+#ifdef HAVE_LIME_X3DH
+	auto core = getCCore();
+	if (!core) return;
+	if (!limeAlgo.empty()) {
+		linphone_core_add_linphone_spec(core, "lime");
+	} else {
+		// If LIME algo is still set in the Core, do not remove the spec
+		const char *core_lime_algo = linphone_config_get_string(core->config, "lime", "curve", "");
+		if (core_lime_algo && strlen(core_lime_algo)) {
+			return;
+		}
+
+		bool remove = true;
+		// Check that no other account needs the spec before removing it
+		for (const auto &account : getCore()->getAccounts()) {
+			if (account != getSharedFromThis()) {
+				const auto &params = account->getAccountParams();
+				const std::string &accountLimeAlgo = params->getLimeAlgo();
+				if (!accountLimeAlgo.empty()) {
+					remove = false;
+					break;
+				}
+			}
+		}
+		if (remove) {
+			linphone_core_remove_linphone_spec(core, "lime");
+		}
+		return;
+	}
+
+	// the lime algo has changed, propagate the change to the encryption engine
+	auto encryptionEngine = getCore()->getEncryptionEngine();
+	if (encryptionEngine && (encryptionEngine->getEngineType() == EncryptionEngine::EngineType::LimeX3dh)) {
+		// just call the create lime user function, it will get the info from the account
+		shared_ptr<Address> addr = mContactAddress;
+		if (!addr) {
+			auto sip = getAccountParams()->getIdentityAddress();
+			if (sip) {
+				auto gr = getCCore()->sal->getUuid();
+				if (gr.empty()) return;
+				addr = sip->clone()->toSharedPtr();
+				addr->setUriParam("gr", "urn:uuid:" + gr);
+			}
+		}
+		auto account = this->getSharedFromThis();
+		if (addr) encryptionEngine->createLimeUser(account, addr->asStringUriOnly());
+	}
+
+#else
+	lWarning() << "Lime X3DH support is not available";
+#endif
+}
 
 void Account::onMwiServerAddressChanged() {
 	if (mState == LinphoneRegistrationOk) {
 		subscribeToMessageWaitingIndication();
 	}
+}
+
+void Account::ccmpConferenceInformationRequestSent() {
+	mCcmpConferenceInformationRequestsCounter++;
+}
+
+void Account::ccmpConferenceInformationResponseReceived() {
+	if (mCcmpConferenceInformationRequestsCounter == 0) {
+		lFatal() << *this << " Receiving more responses than HTTP requests sent";
+	}
+	mCcmpConferenceInformationRequestsCounter--;
+	if (mCcmpConferenceInformationRequestsCounter == 0) {
+		// Notify the application that all responses have been received and therefore the core holds a list of
+		// conference informations that is up to date for this account
+		auto infosCList = Utils::listToCBctbxList<LinphoneConferenceInfo, ConferenceInfo>(mConferenceInfos);
+		_linphone_account_notify_conference_information_updated(toC(), infosCList);
+		bctbx_list_free(infosCList);
+	}
+}
+
+void Account::handleCCMPResponseConferenceList(const HttpResponse &response) {
+	switch (response.getStatus()) {
+		case HttpResponse::Status::Valid:
+			handleResponseConferenceList(this, response);
+			break;
+		case HttpResponse::Status::Timeout:
+			handleTimeoutConferenceList(this, response);
+			break;
+		case HttpResponse::Status::IOError:
+		case HttpResponse::Status::InvalidRequest:
+			handleIoErrorConferenceList(this, response);
+			break;
+	}
+}
+
+void Account::handleCCMPResponseConferenceInformation(const HttpResponse &response) {
+	switch (response.getStatus()) {
+		case HttpResponse::Status::Valid:
+			handleResponseConferenceInformation(this, response);
+			break;
+		case HttpResponse::Status::Timeout:
+			handleTimeoutConferenceInformation(this, response);
+			break;
+		case HttpResponse::Status::IOError:
+		case HttpResponse::Status::InvalidRequest:
+			handleIoErrorConferenceInformation(this, response);
+			break;
+	}
+}
+
+void Account::updateConferenceInfoListWithCcmp() const {
+	const auto ccmpServerUrl = mParams->getCcmpServerUrl();
+	if (ccmpServerUrl.empty()) {
+		lError() << "Unable to get the list of conferences on an unknown CCMP server where account [" << this
+		         << "] is a participant";
+		return;
+	}
+
+	ConfsRequestType confsRequest = ConfsRequestType();
+	CcmpConfsRequestMessageType requestBody = CcmpConfsRequestMessageType(confsRequest);
+	const auto &identity = mParams->getIdentityAddress();
+	std::string identityXconUserId = Utils::getXconId(identity);
+	if (identityXconUserId.empty()) {
+		lError() << "Aborting creation of body of POST to request the list of conferences on the CCMP server "
+		         << ccmpServerUrl << " where account [" << this
+		         << "] is a participant because its CCMP User ID is unknwon";
+		return;
+	}
+	requestBody.setConfUserID(identityXconUserId);
+
+	stringstream httpBody;
+	Xsd::XmlSchema::NamespaceInfomap map;
+	map["conference-info"].name = "urn:ietf:params:xml:ns:conference-info";
+	map["xcon-conference-info"].name = "urn:ietf:params:xml:ns:xcon-conference-info";
+	map["xcon-ccmp"].name = "urn:ietf:params:xml:ns:xcon-ccmp";
+	serializeCcmpRequest(httpBody, requestBody, map);
+	const auto body = httpBody.str();
+
+	// Send request to retrieve the list of all conferences on the CCMP server
+	auto *weakThis = const_cast<Account *>(this);
+	if (!XmlUtils::sendCcmpRequest(getCore(), ccmpServerUrl, identity, body, [weakThis](const HttpResponse &response) {
+		    weakThis->handleCCMPResponseConferenceList(response);
+	    })) {
+		lError() << "An error occurred when requesting informations list linked to " << *this << " to server "
+		         << ccmpServerUrl;
+	}
+}
+
+void Account::handleResponseConferenceList(void *ctx, const HttpResponse &event) {
+	auto account = static_cast<Account *>(ctx);
+	int code = event.getHttpStatusCode();
+	std::shared_ptr<Address> conferenceAddress;
+	if (code >= 200 && code < 300) {
+		const auto &body = event.getBody();
+		auto content = body.getBodyAsString();
+		if (!content.empty()) {
+			try {
+				istringstream data(content);
+				auto responseType = parseCcmpResponse(data, Xsd::XmlSchema::Flags::dont_validate);
+				auto &response = dynamic_cast<CcmpConfsResponseMessageType &>(responseType->getCcmpResponse());
+				const auto responseCodeType = response.getResponseCode();
+				code = static_cast<int>(responseCodeType);
+				if (code >= 200 && code < 300) {
+					auto &confsResponse = response.getConfsResponse();
+					auto &confsInfo = confsResponse.getConfsInfo();
+					if (!confsInfo.present()) return;
+					auto &infos = confsInfo->getEntry();
+					// For every conference that has been retrieved, send one more request to get all the details
+					for (auto &info : infos) {
+						ConfRequestType confRequest = ConfRequestType();
+						auto confObjId = info.getUri();
+
+						CcmpConfRequestMessageType requestBody = CcmpConfRequestMessageType(confRequest);
+						// CCMP URI (conference object ID) if update or delete
+						if (!confObjId.empty()) {
+							requestBody.setConfObjID(confObjId);
+						}
+
+						// Conference user ID
+						const auto &accountParams = account->getAccountParams();
+						const auto &identity = accountParams->getIdentityAddress();
+						const auto ccmpServerUrl = accountParams->getCcmpServerUrl();
+						std::string identityXconUserId = Utils::getXconId(identity);
+						if (identityXconUserId.empty()) {
+							lError() << "Aborting creation of body of POST to request the list of conferences on "
+							            "the CCMP server "
+							         << ccmpServerUrl << " where account [" << account
+							         << "] is a participant because its CCMP User ID is unknwon";
+							return;
+						}
+						requestBody.setConfUserID(identityXconUserId);
+						requestBody.setOperation(OperationType::retrieve);
+
+						stringstream httpBody;
+						Xsd::XmlSchema::NamespaceInfomap map;
+						map["conference-info"].name = "urn:ietf:params:xml:ns:conference-info";
+						map["xcon-conference-info"].name = "urn:ietf:params:xml:ns:xcon-conference-info";
+						map["xcon-ccmp"].name = "urn:ietf:params:xml:ns:xcon-ccmp";
+						serializeCcmpRequest(httpBody, requestBody, map);
+						const auto stringBody = httpBody.str();
+
+						auto weakThis = account;
+						if (XmlUtils::sendCcmpRequest(account->getCore(), ccmpServerUrl, identity, stringBody,
+						                              [weakThis](const HttpResponse &response) {
+							                              weakThis->handleCCMPResponseConferenceInformation(response);
+						                              })) {
+							account->ccmpConferenceInformationRequestSent();
+						} else {
+							lError() << "An error occurred when requesting informations of conference " << confObjId
+							         << " linked to Account [" << account << "] (" << *identity << ") to server "
+							         << ccmpServerUrl;
+						}
+					}
+				}
+			} catch (const std::bad_cast &e) {
+				lError() << "Error while casting parsed CCMP response (CcmpConfsResponseMessageType) in " << *account
+				         << ": " << e.what();
+			} catch (const exception &e) {
+				lError() << "Error while parsing CCMP response (CcmpConfsResponseMessageType) in " << *account << ": "
+				         << e.what();
+			}
+		}
+	}
+}
+
+void Account::handleIoErrorConferenceList(void *ctx, const HttpResponse &event) {
+	auto account = static_cast<Account *>(ctx);
+	const auto ccmpServerUrl = account->getAccountParams()->getCcmpServerUrl();
+	const auto &body = event.getBody();
+	auto content = body.getBodyAsString();
+	lInfo() << "I/O error on retrieving the conference list " << *account << " belongs to from the CCMP server "
+	        << ccmpServerUrl << ": " << content;
+}
+
+void Account::handleTimeoutConferenceList(void *ctx, const HttpResponse &event) {
+	auto account = static_cast<Account *>(ctx);
+	const auto ccmpServerUrl = account->getAccountParams()->getCcmpServerUrl();
+	const auto &body = event.getBody();
+	auto content = body.getBodyAsString();
+	lInfo() << "Timeout error on retrieving the conference list " << *account << " belongs to from the CCMP server "
+	        << ccmpServerUrl << ": " << content;
+}
+
+void Account::handleResponseConferenceInformation(void *ctx, const HttpResponse &event) {
+	auto account = static_cast<Account *>(ctx);
+	int code = event.getHttpStatusCode();
+	std::shared_ptr<Address> conferenceAddress;
+	if (code >= 200 && code < 300) {
+		const auto &body = event.getBody();
+		auto content = body.getBodyAsString();
+		if (!content.empty()) {
+			try {
+				istringstream data(content);
+				auto responseType = parseCcmpResponse(data, Xsd::XmlSchema::Flags::dont_validate);
+				auto &response = dynamic_cast<CcmpConfResponseMessageType &>(responseType->getCcmpResponse());
+				const auto responseCodeType = response.getResponseCode();
+				code = static_cast<int>(responseCodeType);
+				if (code >= 200 && code < 300) {
+					auto &confResponse = response.getConfResponse();
+					auto &confInfo = confResponse.getConfInfo();
+					if (!confInfo.present()) return;
+					std::shared_ptr<ConferenceInfo> info = ConferenceInfo::create();
+					info->setCcmpUri(confInfo->getEntity());
+					auto &confDescription = confInfo->getConferenceDescription();
+					if (confDescription.present()) {
+						auto &description = confDescription->getFreeText();
+						if (description.present() && !description.get().empty()) {
+							info->setDescription(description.get());
+						}
+						auto &subject = confDescription->getSubject();
+						if (subject.present() && !subject.get().empty()) {
+							info->setSubject(subject.get());
+						}
+						auto &confUris = confDescription->getConfUris();
+						auto &uris = confUris->getEntry();
+						for (auto &uri : uris) {
+							info->setUri(Address::create(uri.getUri()));
+						}
+						const auto &availableMedia = confDescription->getAvailableMedia();
+						if (availableMedia.present()) {
+							for (auto &mediaEntry : availableMedia->getEntry()) {
+								const std::string &mediaType = mediaEntry.getType();
+								const LinphoneMediaDirection mediaDirection =
+								    XmlUtils::mediaStatusToMediaDirection(mediaEntry.getStatus().get());
+								LinphoneStreamType streamType = LinphoneStreamTypeUnknown;
+								if (mediaType == "audio") {
+									streamType = LinphoneStreamTypeAudio;
+								} else if (mediaType == "video") {
+									streamType = LinphoneStreamTypeVideo;
+								} else if (mediaType == "text") {
+									streamType = LinphoneStreamTypeText;
+								} else {
+									lError() << "Unrecognized media type " << mediaType;
+								}
+								info->setCapability(streamType, (mediaDirection == LinphoneMediaDirectionSendRecv));
+							}
+						}
+						auto &anySequence(confDescription->getAny());
+						for (const auto &anyElement : anySequence) {
+							auto name = xsd::cxx::xml::transcode<char>(anyElement.getLocalName());
+							auto nodeName = xsd::cxx::xml::transcode<char>(anyElement.getNodeName());
+							auto nodeValue = xsd::cxx::xml::transcode<char>(anyElement.getNodeValue());
+							if (nodeName == "xcon:conference-time") {
+								ConferenceTimeType conferenceTime{anyElement};
+								for (auto &conferenceTimeEntry : conferenceTime.getEntry()) {
+									const std::string base = conferenceTimeEntry.getBase();
+									if (!base.empty()) {
+										auto ics = Ics::Icalendar::createFromString(base);
+										if (ics) {
+											auto timeInfo = ics->toConferenceInfo();
+											info->setDateTime(timeInfo->getDateTime());
+											info->setDuration(timeInfo->getDuration());
+										}
+									}
+								}
+							}
+						}
+					}
+					auto &users = confInfo->getUsers();
+					if (users.present()) {
+						auto &anySequence(users.get().getAny());
+						for (const auto &anyElement : anySequence) {
+							auto name = xsd::cxx::xml::transcode<char>(anyElement.getLocalName());
+							auto nodeName = xsd::cxx::xml::transcode<char>(anyElement.getNodeName());
+							auto nodeValue = xsd::cxx::xml::transcode<char>(anyElement.getNodeValue());
+							if (nodeName == "xcon:allowed-users-list") {
+								ConferenceInfo::participant_list_t participantInfos;
+								AllowedUsersListType allowedUserList{anyElement};
+								auto allowedUsers = allowedUserList.getTarget();
+								for (auto &user : allowedUsers) {
+									auto participantInfo = ParticipantInfo::create(user.getUri());
+									participantInfos.push_back(participantInfo);
+								}
+								info->setParticipants(participantInfos);
+							}
+						}
+						for (auto &user : users->getUser()) {
+							auto &roles = user.getRoles();
+							bool isOrganizer = false;
+							auto ccmpUri = user.getEntity().get();
+							auto participantInfo = info->findParticipant(ccmpUri);
+							if (roles) {
+								auto &entry = roles->getEntry();
+								isOrganizer = (find(entry, "organizer") != entry.end() ? true : false);
+							}
+							// The server CCMP sends responses using the XCON-USERID and, unfortunately, they are
+							// generated by the CCMP server and the SDK has no knowledge of them. RFC4475
+							// fortunately details the tag <associated-aors> that can be used to communicate
+							// additional URIs that should be associated to the entity attribute. For example the
+							// following XML code will allow to associated the participant with address
+							// sip:bob@sip.example.org to the XCON-USERID bob:
+							//<user entity="xcon-userid:bob">
+							//  <associated-aors>
+							//    <entry>
+							//      <uri>sip:bob@sip.example.com</uri>
+							//    </entry>
+							//   </associated-aors>
+							//</user>
+							auto &associatedAors = user.getAssociatedAors();
+							std::shared_ptr<Address> address;
+							if (associatedAors.present()) {
+								for (auto &aor : associatedAors->getEntry()) {
+									auto tmpAddress = Address::create(aor.getUri());
+									if (tmpAddress) {
+										address = tmpAddress;
+									}
+								}
+							}
+							decltype(participantInfo) updatedParticipantInfo;
+							if (participantInfo) {
+								updatedParticipantInfo = participantInfo->clone()->toSharedPtr();
+							} else {
+								updatedParticipantInfo = ParticipantInfo::create(ccmpUri);
+							}
+							if (address) {
+								updatedParticipantInfo->setAddress(address);
+							}
+							if (participantInfo) {
+								info->updateParticipant(updatedParticipantInfo);
+							} else {
+								info->addParticipant(updatedParticipantInfo);
+							}
+							if (isOrganizer) {
+								info->setOrganizer(updatedParticipantInfo);
+							}
+						}
+					}
+					account->addConferenceInfo(info);
+#ifdef HAVE_DB_STORAGE
+					auto &mainDb = account->getCore()->getPrivate()->mainDb;
+					if (mainDb) {
+						mainDb->insertConferenceInfo(info);
+					}
+#endif // HAVE_DB_STORAGE
+				}
+			} catch (const std::bad_cast &e) {
+				lError() << "Error while casting parsed CCMP response (CcmpConfResponseMessageType) in account ["
+				         << *account << ": " << e.what();
+			} catch (const exception &e) {
+				lError() << "Error while parsing CCMP response (CcmpConfResponseMessageType) in " << *account << ": "
+				         << e.what();
+			}
+		}
+	}
+	account->ccmpConferenceInformationResponseReceived();
+}
+
+void Account::handleIoErrorConferenceInformation(void *ctx, const HttpResponse &event) {
+	auto account = static_cast<Account *>(ctx);
+	const auto ccmpServerUrl = account->getAccountParams()->getCcmpServerUrl();
+	const auto &body = event.getBody();
+	auto content = body.getBodyAsString();
+	lInfo() << *account << ": I/O error on retrieving the information of a conference from the CCMP server "
+	        << ccmpServerUrl << ": " << content;
+	account->ccmpConferenceInformationResponseReceived();
+}
+
+void Account::handleTimeoutConferenceInformation(void *ctx, const HttpResponse &event) {
+	auto account = static_cast<Account *>(ctx);
+	const auto ccmpServerUrl = account->getAccountParams()->getCcmpServerUrl();
+	const auto &body = event.getBody();
+	auto content = body.getBodyAsString();
+	lInfo() << *account << ": Timeout error on retrieving the information of a conference from the CCMP server "
+	        << ccmpServerUrl << ": " << content;
+	account->ccmpConferenceInformationResponseReceived();
 }
 
 // -----------------------------------------------------------------------------
@@ -1627,6 +2141,14 @@ LinphoneAccountCbsMessageWaitingIndicationChangedCb AccountCbs::getMessageWaitin
 
 void AccountCbs::setMessageWaitingIndicationChanged(LinphoneAccountCbsMessageWaitingIndicationChangedCb cb) {
 	mMessageWaitingIndicationChangedCb = cb;
+}
+
+LinphoneAccountCbsConferenceInformationUpdatedCb AccountCbs::getConferenceInformationUpdated() const {
+	return mConferenceInformationUpdatedCb;
+}
+
+void AccountCbs::setConferenceInformationUpdated(LinphoneAccountCbsConferenceInformationUpdatedCb cb) {
+	mConferenceInformationUpdatedCb = cb;
 }
 
 #ifndef _MSC_VER

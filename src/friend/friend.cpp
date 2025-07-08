@@ -55,6 +55,8 @@ static constexpr std::array<FriendCapabilityNameMap, 3> friendCapabilityNameMap{
      {"ephemeral", LinphoneFriendCapabilityEphemeralMessages}}};
 
 static const std::string emptyString;
+static const shared_ptr<PresenceModel> nullPresenceModel = nullptr;
+;
 
 // -----------------------------------------------------------------------------
 
@@ -76,7 +78,6 @@ Friend::~Friend() {
 	releaseOps();
 	clearPresenceModels();
 	if (mInfo) buddy_info_free(mInfo);
-	if (mBctbxAddresses) bctbx_list_free(mBctbxAddresses);
 }
 
 Friend *Friend::clone() const {
@@ -92,7 +93,7 @@ std::string Friend::toString() const {
 
 LinphoneStatus Friend::setAddress(const std::shared_ptr<const Address> &address) {
 	if (!address) return -1;
-	Address *newAddress = address->clone();
+	shared_ptr<Address> newAddress = address->clone()->toSharedPtr();
 	newAddress->clean();
 
 	const std::shared_ptr<Address> previousAddress = getAddress();
@@ -110,10 +111,11 @@ LinphoneStatus Friend::setAddress(const std::shared_ptr<const Address> &address)
 			    newAddress->getDisplayName().empty() ? newAddress->getUsername() : newAddress->getDisplayName();
 			createVcard(name);
 		}
-		if (mVcard) mVcard->editMainSipAddress(strAddress);
-		newAddress->unref();
+		if (mVcard) {
+			mVcard->editMainSipAddress(strAddress);
+		}
 	} else {
-		mUri = newAddress->getSharedFromThis();
+		mUri = newAddress;
 	}
 
 	return 0;
@@ -182,6 +184,9 @@ void Friend::setRefKey(const std::string &key) {
 }
 
 void Friend::setStarred(bool starred) {
+	if (linphone_core_vcard_supported() && mVcard) {
+		mVcard->setStarred(starred);
+	}
 	mIsStarred = starred;
 }
 
@@ -211,13 +216,16 @@ const std::shared_ptr<Address> Friend::getAddress() const {
 
 const std::list<std::shared_ptr<Address>> &Friend::getAddresses() const {
 	if (linphone_core_vcard_supported() && mVcard) {
-		mAddresses = mVcard->getSipAddresses();
+		mAddresses.mList = mVcard->getSipAddresses();
 	} else {
-		mAddresses.clear();
-		if (mUri) mAddresses.push_back(mUri);
+		mAddresses.mList.clear();
+		if (mUri) mAddresses.mList.push_back(mUri);
 	}
-	syncBctbxAddresses();
-	return mAddresses;
+	return mAddresses.mList;
+}
+
+const bctbx_list_t *Friend::getAddressesCList() const {
+	return mAddresses.getCList();
 }
 
 int Friend::getCapabilities() const {
@@ -225,8 +233,7 @@ int Friend::getCapabilities() const {
 
 	const std::list<std::shared_ptr<Address>> addrs = getAddresses();
 	for (auto addr : addrs) {
-		std::string uri = addr->asStringUriOnly();
-		const std::shared_ptr<PresenceModel> &model = getPresenceModelForUriOrTel(uri);
+		const std::shared_ptr<PresenceModel> &model = getPresenceModelForAddress(addr);
 		if (model) capabilities |= model->getCapabilities();
 	}
 
@@ -244,8 +251,7 @@ float Friend::getCapabilityVersion(LinphoneFriendCapability capability) const {
 
 	const std::list<std::shared_ptr<Address>> addrs = getAddresses();
 	for (auto addr : addrs) {
-		std::string uri = addr->asStringUriOnly();
-		const std::shared_ptr<PresenceModel> &model = getPresenceModelForUriOrTel(uri);
+		const std::shared_ptr<PresenceModel> &model = getPresenceModelForAddress(addr);
 		if (model) {
 			float presence_version = model->getCapabilityVersion(capability);
 			if (presence_version > version) version = presence_version;
@@ -269,8 +275,7 @@ LinphoneConsolidatedPresence Friend::getConsolidatedPresence() const {
 
 	const std::list<std::shared_ptr<Address>> addrs = getAddresses();
 	for (auto addr : addrs) {
-		std::string uri = addr->asStringUriOnly();
-		const std::shared_ptr<PresenceModel> &model = getPresenceModelForUriOrTel(uri);
+		const std::shared_ptr<PresenceModel> &model = getPresenceModelForAddress(addr);
 		if (model) {
 			LinphoneConsolidatedPresence consolidated = model->getConsolidatedPresence();
 			if (consolidated != LinphoneConsolidatedPresenceOffline) {
@@ -363,8 +368,7 @@ const std::shared_ptr<PresenceModel> Friend::getPresenceModel() const {
 
 	std::list<shared_ptr<Address>> addrs = getAddresses();
 	for (auto addr : addrs) {
-		std::string uri = addr->asStringUriOnly();
-		const std::shared_ptr<PresenceModel> &model = getPresenceModelForUriOrTel(uri);
+		const std::shared_ptr<PresenceModel> &model = getPresenceModelForAddress(addr);
 		if (model) {
 			time_t timestamp = model->getTimestamp();
 			if (!result || (timestamp > presenceModelLatestTimestamp)) {
@@ -389,13 +393,22 @@ const std::shared_ptr<PresenceModel> Friend::getPresenceModel() const {
 	return result;
 }
 
-const std::shared_ptr<PresenceModel> Friend::getPresenceModelForUriOrTel(const std::string &uriOrTel) const {
-	if (mPresenceModels.empty()) return nullptr;
+const std::shared_ptr<PresenceModel> &Friend::getPresenceModelForUriOrTel(const std::string &uriOrTel) const {
+	if (mPresenceModels.empty()) return nullPresenceModel;
 	const std::shared_ptr<Address> uriOrTelAddr = getCore()->interpretUrl(uriOrTel, false);
-	if (!uriOrTelAddr) return nullptr;
-	const auto it = std::find_if(mPresenceModels.cbegin(), mPresenceModels.cend(),
-	                             [&](const auto &elem) { return elem.first->weakEqual(*uriOrTelAddr); });
-	return (it == mPresenceModels.cend()) ? nullptr : it->second;
+	if (!uriOrTelAddr) return nullPresenceModel;
+	const auto &it = std::find_if(mPresenceModels.cbegin(), mPresenceModels.cend(),
+	                              [&](const auto &elem) { return elem.first->weakEqual(*uriOrTelAddr); });
+	return (it == mPresenceModels.cend()) ? nullPresenceModel : it->second;
+}
+
+const std::shared_ptr<PresenceModel> &
+Friend::getPresenceModelForAddress(const std::shared_ptr<const Address> &address) const {
+	if (mPresenceModels.empty()) return nullPresenceModel;
+	if (!address) return nullPresenceModel;
+	const auto &it = std::find_if(mPresenceModels.cbegin(), mPresenceModels.cend(),
+	                              [&](const auto &elem) { return elem.first->weakEqual(address); });
+	return (it == mPresenceModels.cend()) ? nullPresenceModel : it->second;
 }
 
 const std::string &Friend::getRefKey() const {
@@ -403,6 +416,9 @@ const std::string &Friend::getRefKey() const {
 }
 
 bool Friend::getStarred() const {
+	if (linphone_core_vcard_supported() && mVcard) {
+		return mVcard->getStarred();
+	}
 	return mIsStarred;
 }
 
@@ -512,27 +528,30 @@ void Friend::addAddress(const std::shared_ptr<const Address> &address) {
 		}
 	}
 
-	std::shared_ptr<Address> newAddr = address->clone()->getSharedFromThis();
+	shared_ptr<Address> newAddr = address->clone()->toSharedPtr();
 	newAddr->clean();
-	std::string uri = newAddr->asStringUriOnly();
+	string uri = newAddr->asStringUriOnly();
 	if (mFriendList) addFriendToListMapIfNotInItYet(uri);
 
 	if (linphone_core_vcard_supported()) {
 		if (!mVcard) {
-			const std::string name =
-			    newAddr->getDisplayName().empty() ? newAddr->getUsername() : newAddr->getDisplayName();
+			const string name = newAddr->getDisplayName().empty() ? newAddr->getUsername() : newAddr->getDisplayName();
 			createVcard(name);
 		}
-		if (mVcard) mVcard->addSipAddress(uri);
-	} else if (!mUri) mUri = newAddr;
-	newAddr->unref();
+		if (mVcard) {
+			mVcard->addSipAddress(uri);
+		}
+	} else if (!mUri) {
+		mUri = newAddr;
+	}
 }
 
 void Friend::addPhoneNumber(const std::string &phoneNumber) {
 	if (phoneNumber.empty()) return;
+	auto flattenedPhoneNumber = Utils::flattenPhoneNumber(phoneNumber);
 
 	for (auto existing : getPhoneNumbers()) {
-		if (existing == phoneNumber) {
+		if (flattenedPhoneNumber == Utils::flattenPhoneNumber(existing)) {
 			lInfo() << "Trying to add an already existing phone number to friend, skipping";
 			return;
 		}
@@ -552,10 +571,12 @@ void Friend::addPhoneNumberWithLabel(const std::shared_ptr<const FriendPhoneNumb
 	if (!phoneNumber) return;
 	const std::string &phone = phoneNumber->getPhoneNumber();
 	if (phone.empty()) return;
+	auto flattenedPhoneNumber = Utils::flattenPhoneNumber(phone);
 
 	const std::string &label = phoneNumber->getLabel();
 	for (auto &existing : getPhoneNumbersWithLabel()) {
-		if (existing->getPhoneNumber() == phone && existing->getLabel() == label) {
+		if (existing->getLabel() == label &&
+		    flattenedPhoneNumber == Utils::flattenPhoneNumber(existing->getPhoneNumber())) {
 			lInfo() << "Trying to add an already existing phone number / label to friend, skipping";
 			return;
 		}
@@ -627,8 +648,7 @@ bool Friend::hasCapability(const LinphoneFriendCapability capability) const {
 bool Friend::hasCapabilityWithVersion(const LinphoneFriendCapability capability, float version) const {
 	std::list<std::shared_ptr<Address>> addrs = getAddresses();
 	for (auto addr : addrs) {
-		std::string uri = addr->asStringUriOnly();
-		const std::shared_ptr<PresenceModel> &model = getPresenceModelForUriOrTel(addr->asStringUriOnly());
+		const std::shared_ptr<PresenceModel> &model = getPresenceModelForAddress(addr);
 		if (model && model->hasCapabilityWithVersion(capability, version)) return true;
 	}
 
@@ -644,8 +664,7 @@ bool Friend::hasCapabilityWithVersion(const LinphoneFriendCapability capability,
 bool Friend::hasCapabilityWithVersionOrMore(const LinphoneFriendCapability capability, float version) const {
 	std::list<std::shared_ptr<Address>> addrs = getAddresses();
 	for (auto addr : addrs) {
-		std::string uri = addr->asStringUriOnly();
-		const std::shared_ptr<PresenceModel> &model = getPresenceModelForUriOrTel(addr->asStringUriOnly());
+		const std::shared_ptr<PresenceModel> &model = getPresenceModelForAddress(addr);
 		if (model && model->hasCapabilityWithVersionOrMore(capability, version)) return true;
 	}
 
@@ -689,6 +708,10 @@ bool Friend::hasPhoneNumber(const std::string &searchedPhoneNumber) const {
 
 bool Friend::inList() const {
 	return mFriendList != nullptr;
+}
+
+FriendList *Friend::getFriendList() const {
+	return mFriendList;
 }
 
 bool Friend::isPresenceReceived() const {
@@ -752,12 +775,12 @@ void Friend::addAddressesAndNumbersIntoMaps(const std::shared_ptr<FriendList> &l
 	if (!mRefKey.empty()) list->mFriendsMapByRefKey.insert({mRefKey, getSharedFromThis()});
 
 	std::list<std::string> phoneNumbers = getPhoneNumbers();
-	for (auto phoneNumber : phoneNumbers) {
+	for (const auto &phoneNumber : phoneNumbers) {
 		addFriendToListMapIfNotInItYet(phoneNumberToSipUri(phoneNumber));
 	}
 
-	std::list<shared_ptr<Address>> addresses = getAddresses();
-	for (auto address : addresses) {
+	const std::list<shared_ptr<Address>> &addresses = getAddresses();
+	for (const auto &address : addresses) {
 		addFriendToListMapIfNotInItYet(address->asStringUriOnly());
 	}
 }
@@ -1058,15 +1081,6 @@ const std::string &Friend::sipUriToPhoneNumber(const std::string &uri) const {
 		return mSipUriToPhoneNumberMap.at(uri);
 	} catch (std::out_of_range &) {
 		return emptyString;
-	}
-}
-
-void Friend::syncBctbxAddresses() const {
-	if (mBctbxAddresses) {
-		bctbx_list_free(mBctbxAddresses), mBctbxAddresses = nullptr;
-	}
-	for (const auto &addr : mAddresses) {
-		mBctbxAddresses = bctbx_list_append(mBctbxAddresses, addr->toC());
 	}
 }
 

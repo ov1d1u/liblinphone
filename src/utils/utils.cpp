@@ -24,8 +24,10 @@
 #include <list>
 #include <sstream>
 
-#include <bctoolbox/charconv.h>
-#include <bctoolbox/port.h>
+#include "bctoolbox/charconv.h"
+#include "bctoolbox/defs.h"
+#include "bctoolbox/port.h"
+#include "bctoolbox/vfs_encrypted.hh"
 
 #include "c-wrapper/internal/c-tools.h"
 #include "conference/conference-info.h"
@@ -36,6 +38,10 @@
 #ifdef HAVE_ADVANCED_IM
 #include "xml/resource-lists.h"
 #endif
+
+#ifdef __APPLE__
+#include "utils/time-utils.h"
+#endif // __APPLE__
 
 // =============================================================================
 
@@ -160,6 +166,11 @@ bool Utils::containsInsensitive(const string &haystack, const string &needle) {
 	return lowercaseHaystack.find(lowercaseNeedle) != std::string::npos;
 }
 
+bool Utils::endsWith(const string &haystack, const string &needle) {
+	if (needle.size() > haystack.size()) return false;
+	return std::equal(needle.rbegin(), needle.rend(), haystack.rbegin());
+}
+
 std::vector<string> Utils::stringToLower(const std::vector<string> &strs) {
 	std::vector<std::string> results;
 	for (const auto &str : strs) {
@@ -217,6 +228,22 @@ string Utils::trim(const string &str) {
 	return (itBack <= itFront ? string() : string(itFront, itBack));
 }
 
+std::string Utils::flattenPhoneNumber(const std::string &str) {
+	std::string result;
+	const char *number = str.c_str();
+	char *unescaped_phone_number = belle_sip_username_unescape_unnecessary_characters(number);
+	const char *r;
+
+	for (r = unescaped_phone_number; *r != '\0'; ++r) {
+		if (*r == '+' || isdigit(*r)) {
+			result += *r;
+		}
+	}
+
+	belle_sip_free(unescaped_phone_number);
+	return result;
+}
+
 std::string Utils::normalizeFilename(const std::string &str) {
 	std::string result(str);
 #ifdef _WIN32
@@ -253,6 +280,11 @@ time_t Utils::getTmAsTimeT(const tm &t) {
 #ifdef _WIN32
 	result = _mkgmtime(&tCopy);
 #elif defined(TARGET_IPHONE_SIMULATOR) || defined(__linux__)
+	if (!tCopy.tm_zone) {
+		// tCopy.tm_gmtoff is reset by timegm even though it doesn't take it into account
+		// No need to apply offset if tm_zone is set as timegm takes into account the timezone.
+		offset = tCopy.tm_gmtoff;
+	}
 	result = timegm(&tCopy);
 #else
 	// mktime uses local time => It's necessary to adjust the timezone to get an UTC time.
@@ -261,14 +293,17 @@ time_t Utils::getTmAsTimeT(const tm &t) {
 #endif
 
 	if (result == time_t(-1)) {
+		int error = errno;
 		if (tCopy.tm_hour == 0 && tCopy.tm_min == 0 && tCopy.tm_sec == 0 && tCopy.tm_year == 70 && tCopy.tm_mon == 0 &&
-		    tCopy.tm_mday == 1)
-			return time_t(
-			    0); // Not really an error as we try to getTmAsTimeT from initial day (Error comes from timezones)
-		lError() << "timegm/mktime failed: " << strerror(errno);
+		    tCopy.tm_mday == 1) {
+			// Not really an error as we try to getTmAsTimeT from initial day (Error comes from timezones)
+			return time_t(0);
+		}
+		if (error > 0) {
+			lError() << "timegm/mktime failed: " << strerror(error);
+		}
 		return time_t(-1);
 	}
-
 	return result - offset;
 }
 
@@ -283,12 +318,57 @@ std::string Utils::getTimeAsString(const std::string &format, time_t t) {
 time_t Utils::getStringToTime(const std::string &format, const std::string &s) {
 #ifndef _WIN32
 	tm dateTime;
-
+#ifdef __linux__
+	// strptime doesn't fill tm_zone fields therefore it is left uninitialized
+	dateTime.tm_zone = nullptr;
+	dateTime.tm_gmtoff = 0;
+#endif
 	if (strptime(s.c_str(), format.c_str(), &dateTime)) {
 		return getTmAsTimeT(dateTime);
 	}
 #endif
 	return 0;
+}
+
+std::string removeIso8601FractionalPart(const std::string &updateTime) {
+	auto prunedUpdateTime = updateTime;
+	// According to ISO8601, factional part separator can be either a dot on the baseline or a comma. Hence test for
+	// both to make sure we do not miss anything
+	const auto dotPos = prunedUpdateTime.find_last_of('.');
+	const auto commaPos = prunedUpdateTime.find_last_of(',');
+	const auto fractionalPartPos = (dotPos != std::string::npos) ? dotPos : commaPos;
+	if (fractionalPartPos != std::string::npos) {
+		for (const auto c : {'Z', '+', '-'}) {
+			const auto charPos = prunedUpdateTime.find_last_of(c);
+			if ((charPos != std::string::npos) && (charPos > fractionalPartPos)) {
+				auto beginIt = std::begin(prunedUpdateTime);
+				auto fractionalPartDifferenceType = static_cast<decltype(beginIt)::difference_type>(fractionalPartPos);
+				auto charPosDifferenceType = static_cast<decltype(beginIt)::difference_type>(charPos);
+				prunedUpdateTime.erase(beginIt + fractionalPartDifferenceType, beginIt + charPosDifferenceType);
+				break;
+			}
+		}
+	}
+	return prunedUpdateTime;
+}
+
+time_t Utils::iso8601ToTime(const std::string &iso8601DateTime) {
+	auto iso8601DateTimeNoFractional = removeIso8601FractionalPart(iso8601DateTime);
+#ifdef __APPLE__
+	return iso8601ToTimeApple(iso8601DateTimeNoFractional);
+#else
+	std::string format = "%FT%T%z";
+	return Utils::getStringToTime(format, iso8601DateTimeNoFractional);
+#endif // __APPLE__
+}
+
+std::string Utils::timeToIso8601(time_t t) {
+#ifdef __APPLE__
+	return timeToIso8601Apple(t);
+#else
+	std::string format = "%FT%T%z";
+	return Utils::getTimeAsString(format, t);
+#endif // __APPLE__
 }
 
 // -----------------------------------------------------------------------------
@@ -410,7 +490,7 @@ std::shared_ptr<Address> Utils::getSipAddress(const std::string &str, const std:
 	return address;
 }
 
-std::string Utils::getXconId(const std::shared_ptr<Address> &address) {
+std::string Utils::getXconId(const std::shared_ptr<const Address> &address) {
 	// CCMP user ID can only be made up by only 40 different characters
 	// (https://www.rfc-editor.org/rfc/rfc6501#section-4.6.5) We are therefore taking the identity and transform invalid
 	// characters into valid ones in a way that the resulting string is unique for any given mIdentity string
@@ -546,4 +626,88 @@ std::ostream &operator<<(std::ostream &ostr, LinphoneGlobalState state) {
 	return ostr;
 }
 
+void Utils::configSetString(LpConfig *lpconfig,
+                            const std::string &section,
+                            const std::string &key,
+                            const std::string &value) {
+	linphone_config_set_string(lpconfig, section.c_str(), key.c_str(), value.c_str());
+}
+
+void Utils::configSetStringList(LpConfig *lpconfig,
+                                const std::string &section,
+                                const std::string &key,
+                                const std::list<std::string> &list) {
+	bctbx_list_t *c_list = NULL;
+	for (std::string value : list) {
+		c_list = bctbx_list_append(c_list, bctbx_strdup(L_STRING_TO_C(value)));
+	}
+	linphone_config_set_string_list(lpconfig, section.c_str(), key.c_str(), c_list);
+	bctbx_list_free_with_data(c_list, (bctbx_list_free_func)ms_free);
+}
+
+std::list<std::string>
+Utils::configGetStringList(LpConfig *lpconfig, const std::string &section, const std::string &key) {
+	bctbx_list_t *c_list = linphone_config_get_string_list(lpconfig, section.c_str(), key.c_str(), NULL);
+	std::list<std::string> cppList;
+	if (c_list != NULL) {
+		for (bctbx_list_t *it = c_list; it != NULL; it = bctbx_list_next(it)) {
+			cppList.push_back(L_C_TO_STRING(static_cast<const char *>(bctbx_list_get_data(it))));
+		}
+		bctbx_list_free_with_data(c_list, (bctbx_list_free_func)bctbx_free);
+	}
+	return cppList;
+}
+
+string Utils::getFileExtension(const string &filePath) {
+	size_t pos = filePath.rfind('.', filePath.length());
+	if (pos != string::npos) {
+		return (filePath.substr(pos + 1, filePath.length() - pos));
+	}
+
+	return "";
+}
+
+string Utils::convertFileToBase64(const string &filePath) {
+	auto file = bctbx_file_open(bctbx_vfs_get_standard(), filePath.c_str(), "r");
+	size_t file_size = (size_t)bctbx_file_size(file);
+	unsigned char *buffer = (unsigned char *)bctbx_malloc(file_size);
+	bctbx_file_read(file, buffer, file_size, 0);
+	bctbx_file_close(file);
+
+	size_t b64Size = 0;
+	bctbx_base64_encode(nullptr, &b64Size, buffer, file_size);
+	unsigned char *base64Buffer = (unsigned char *)bctbx_malloc(b64Size + 1);
+	bctbx_base64_encode(base64Buffer, &b64Size, buffer, file_size);
+	base64Buffer[b64Size] = '\0';
+
+	string base64AsString = "data:image/";
+	string fileExtension = Utils::getFileExtension(filePath);
+	base64AsString.append(fileExtension);
+	base64AsString.append(";base64,");
+	base64AsString.append(std::string((char *)base64Buffer));
+
+	bctbx_free(buffer);
+	bctbx_free(base64Buffer);
+
+	return base64AsString;
+}
+
+bool Utils::isIp(const string &remote) {
+	bool ret = false;
+	int err;
+
+	struct addrinfo hints {};
+	hints.ai_family = AF_UNSPEC;
+	hints.ai_socktype = SOCK_DGRAM;
+	hints.ai_flags = AI_NUMERICHOST | AI_NUMERICSERV;
+	struct addrinfo *res0 = nullptr;
+	err = bctbx_getaddrinfo(remote.c_str(), "8000", &hints, &res0);
+	if (err != 0) {
+		return FALSE;
+	}
+	auto sa_family = res0->ai_addr->sa_family;
+	ret = (sa_family == AF_INET6) || (sa_family == AF_INET);
+	bctbx_freeaddrinfo(res0);
+	return ret;
+}
 LINPHONE_END_NAMESPACE

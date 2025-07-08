@@ -25,32 +25,66 @@
 #include "c-wrapper/internal/c-tools.h"
 #include "call/call.h"
 #include "conference/conference-info.h"
+#include "conference/conference-scheduler.h"
 #include "conference/params/media-session-params.h"
 #include "conference/participant-device.h"
 #include "conference/participant-info.h"
 #include "conference/session/media-session-p.h"
 #include "conference/session/media-session.h"
+#include "conference/sip-conference-scheduler.h"
 #include "liblinphone_tester.h"
 #include "linphone/api/c-account-params.h"
 #include "linphone/api/c-account.h"
 #include "linphone/api/c-address.h"
+#include "linphone/api/c-conference-scheduler.h"
 #include "linphone/api/c-participant.h"
 #include "sal/call-op.h"
 #include "sal/sal_media_description.h"
 #include "shared_tester_functions.h"
 #include "tester_utils.h"
+#ifdef HAVE_LIME_X3DH
+#include "lime/lime.hpp"
+#endif // HAVE_LIME_X3DH
 
 using namespace std;
 #include <sstream>
 
 using namespace LinphonePrivate;
+#ifdef HAVE_LIME_X3DH
+namespace {
+std::vector<std::pair<lime::CurveId, std::string>> parseLimeIks(const char *attr) {
+	std::vector<std::pair<lime::CurveId, std::string>> algoIks;
+	std::stringstream lineStream{std::string(attr)};
+	std::string algoIkString;
 
-void check_lime_ik(LinphoneCoreManager *mgr, LinphoneCall *call) {
+	// Split line by semi colon fields
+	while (std::getline(lineStream, algoIkString, ';')) {
+		// split the field found by colon
+		std::string algoString, Ikb64;
+		std::stringstream algoIkStream(algoIkString);
+		std::getline(algoIkStream, algoString, ':');
+		std::getline(algoIkStream, Ikb64);
+
+		auto algo = lime::string2CurveId(algoString);
+		// check the algo is valid
+		if (algo == lime::CurveId::unset) {
+			lWarning() << "Invalid lime algo[" << algoString << "] skip it";
+		} else {
+			algoIks.emplace_back(algo, Ikb64);
+		}
+	}
+	return algoIks;
+}
+} // anonymous namespace
+#endif // HAVE_LIME_X3DH
+
+void check_lime_ik(LinphoneCoreManager *mgr, BCTBX_UNUSED(LinphoneCall *call)) {
 
 	if (!linphone_core_lime_x3dh_enabled(mgr->lc)) {
 		return;
 	}
 
+#ifdef HAVE_LIME_X3DH
 	// Do not check Ik if database is encrypted
 	if (is_filepath_encrypted(mgr->lime_database_path)) {
 		return;
@@ -66,18 +100,36 @@ void check_lime_ik(LinphoneCoreManager *mgr, LinphoneCall *call) {
 		if (!lime_server_found) return;
 		const LinphoneAddress *call_account_contact = linphone_account_get_contact_address(call_account);
 		char *call_account_contact_str = linphone_address_as_string_uri_only(call_account_contact);
-		refIk = lime_get_userIk(mgr, call_account_contact_str);
+		auto coreDefaultCurve =
+		    lime::string2CurveId(linphone_config_get_string(mgr->lc->config, "lime", "curve", "c25519"));
+		refIk = lime_get_userIk(mgr, call_account_contact_str, static_cast<uint8_t>(coreDefaultCurve));
 		BC_ASSERT_PTR_NOT_NULL(refIk);
-		ms_free(call_account_contact_str);
 
 		SalMediaDescription *desc = _linphone_call_get_local_desc(call);
 		belle_sdp_session_description_t *sdp = desc->toSdp();
 		const char *ik = belle_sdp_session_description_get_attribute_value(sdp, "Ik");
-		BC_ASSERT_PTR_NOT_NULL(ik);
+		BC_ASSERT_PTR_NOT_NULL(ik); // for now we always have an Ik as the default is c25519 but at some point (see
+		                            // comment in lime-x3dh-encryption-engine.cpp) it will not be true
 		BC_ASSERT_PTR_NOT_NULL(refIk);
 		if (refIk && ik) BC_ASSERT_STRING_EQUAL(refIk, ik);
 		if (refIk) ms_free(refIk);
+
+		// Check lime-Iks param
+		const char *limeIks = belle_sdp_session_description_get_attribute_value(sdp, "lime-Iks");
+		if (limeIks) { // We do have a lime-Iks : parse it and check it matches what's in db
+			auto Iks = parseLimeIks(limeIks);
+			for (const auto &Ik : Iks) {
+				auto refIk = lime_get_userIk(mgr, call_account_contact_str, static_cast<uint8_t>(Ik.first));
+				BC_ASSERT_PTR_NOT_NULL(refIk);
+				if (refIk) {
+					BC_ASSERT_STRING_EQUAL(refIk, Ik.second.c_str());
+					bctbx_free(refIk);
+				}
+			}
+		}
+		ms_free(call_account_contact_str);
 	}
+#endif // HAVE_LIME_X3DH
 }
 
 static void check_ice_from_rtp(LinphoneCall *c1, LinphoneCall *c2, LinphoneStreamType stream_type) {
@@ -557,21 +609,25 @@ void check_video_conference_with_local_participant(bctbx_list_t *participants,
 	}
 }
 
-void _linphone_conference_video_change(bctbx_list_t *lcs,
-                                       LinphoneCoreManager *mgr1,
-                                       LinphoneCoreManager *mgr2,
-                                       LinphoneCoreManager *mgr3) {
+LinphoneCoreManager *_linphone_conference_video_change(bctbx_list_t *lcs,
+                                                       LinphoneCoreManager *mgr1,
+                                                       LinphoneCoreManager *mgr2,
+                                                       LinphoneCoreManager *mgr3) {
 	MSMireControl c1 = {{0, 5, 10, 15, 20, 25}};
 	MSMireControl c3 = {{100, 120, 140, 160, 180, 200}};
 
+	stats initial_mgr1_stat = mgr1->stat;
+	stats initial_mgr2_stat = mgr2->stat;
+	stats initial_mgr3_stat = mgr3->stat;
 	for (LinphoneCoreManager *mgr : {mgr1, mgr2, mgr3}) {
 		LinphoneCall *call = linphone_core_get_current_call(mgr->lc);
 		BC_ASSERT_PTR_NOT_NULL(call);
-		if (!call) return;
+		if (!call) return NULL;
 		VideoStream *vstream = (VideoStream *)linphone_call_get_stream(call, LinphoneStreamTypeVideo);
 		if (mgr != mgr2) { // mgr2 is audio only
-			BC_ASSERT_TRUE(vstream && vstream->source && ms_filter_get_id(vstream->source) == MS_MIRE_ID);
-			if (vstream && vstream->source && ms_filter_get_id(vstream->source) == MS_MIRE_ID) {
+			bool filterIsMire = (vstream && vstream->source && ms_filter_get_id(vstream->source) == MS_MIRE_ID);
+			BC_ASSERT_TRUE(filterIsMire);
+			if (filterIsMire) {
 				if (mgr == mgr1) ms_filter_call_method(vstream->source, MS_MIRE_SET_COLOR, &c1);
 				else ms_filter_call_method(vstream->source, MS_MIRE_SET_COLOR, &c3);
 			}
@@ -587,9 +643,17 @@ void _linphone_conference_video_change(bctbx_list_t *lcs,
 	// mgr3 speaks and mgr1's video change
 	linphone_core_enable_mic(mgr1->lc, FALSE);
 	linphone_core_enable_mic(mgr2->lc, FALSE);
-	lInfo() << __func__ << ": mgr3 speaks";
-	wait_for_list(lcs, NULL, 0, 5000);
+	linphone_core_enable_mic(mgr3->lc, TRUE);
+	lInfo() << __func__ << ": " << linphone_core_get_identity(mgr3->lc) << " speaks";
+	BC_ASSERT_TRUE(wait_for_list(lcs, &mgr1->stat.number_of_active_speaker_participant_device_changed,
+	                             initial_mgr1_stat.number_of_active_speaker_participant_device_changed + 1,
+	                             liblinphone_tester_sip_timeout));
+	BC_ASSERT_TRUE(wait_for_list(lcs, &mgr2->stat.number_of_active_speaker_participant_device_changed,
+	                             initial_mgr2_stat.number_of_active_speaker_participant_device_changed + 1,
+	                             liblinphone_tester_sip_timeout));
+	linphone_call_check_rtp_sessions(call1);
 	BC_ASSERT_TRUE(linphone_call_compare_video_color(call1, c3, MediaStreamSendRecv, ""));
+	BC_ASSERT_FALSE(linphone_call_compare_video_color(call1, c1, MediaStreamSendRecv, ""));
 
 	// mgr1 should see mgr3 as active speaker
 	LinphoneParticipantDevice *device = linphone_conference_get_active_speaker_participant_device(confMgr1);
@@ -621,14 +685,21 @@ void _linphone_conference_video_change(bctbx_list_t *lcs,
 		bctbx_list_free_with_data(devices, (bctbx_list_free_func)linphone_participant_device_unref);
 	}
 
-	// mgr2 speaks until mgr1's video change
-	linphone_core_enable_mic(mgr2->lc, TRUE);
+	// mgr3 speaks until mgr2's video change
 	linphone_core_enable_mic(mgr3->lc, FALSE);
-	lInfo() << __func__ << ": mgr2 speaks";
+	linphone_core_enable_mic(mgr2->lc, TRUE);
+	linphone_core_enable_mic(mgr1->lc, FALSE);
+	lInfo() << __func__ << ": " << linphone_core_get_identity(mgr2->lc) << " speaks";
+	BC_ASSERT_TRUE(wait_for_list(lcs, &mgr1->stat.number_of_active_speaker_participant_device_changed,
+	                             initial_mgr1_stat.number_of_active_speaker_participant_device_changed + 2,
+	                             liblinphone_tester_sip_timeout));
+	BC_ASSERT_TRUE(wait_for_list(lcs, &mgr3->stat.number_of_active_speaker_participant_device_changed,
+	                             initial_mgr3_stat.number_of_active_speaker_participant_device_changed + 1,
+	                             liblinphone_tester_sip_timeout));
 	/* mg2 is audio-only, so this shall not affect video on other participants */
-	wait_for_list(lcs, NULL, 0, 5000);
 
 	// mgr1 still receives the video of the last active speaker that has video
+	linphone_call_check_rtp_sessions(call1);
 	BC_ASSERT_TRUE(linphone_call_compare_video_color(call1, c3, MediaStreamSendRecv, ""));
 	BC_ASSERT_FALSE(linphone_call_compare_video_color(call1, c1, MediaStreamSendRecv, ""));
 
@@ -648,10 +719,17 @@ void _linphone_conference_video_change(bctbx_list_t *lcs,
 	}
 
 	// mgr1 speaks and mgr1's video not change
-	lInfo() << __func__ << ": mgr1 speaks";
-	linphone_core_enable_mic(mgr2->lc, FALSE);
+	lInfo() << __func__ << ": " << linphone_core_get_identity(mgr1->lc) << " speaks";
 	linphone_core_enable_mic(mgr1->lc, TRUE);
-	wait_for_list(lcs, NULL, 0, 5000);
+	linphone_core_enable_mic(mgr2->lc, FALSE);
+	linphone_core_enable_mic(mgr3->lc, FALSE);
+	BC_ASSERT_TRUE(wait_for_list(lcs, &mgr2->stat.number_of_active_speaker_participant_device_changed,
+	                             initial_mgr2_stat.number_of_active_speaker_participant_device_changed + 2,
+	                             liblinphone_tester_sip_timeout));
+	BC_ASSERT_TRUE(wait_for_list(lcs, &mgr3->stat.number_of_active_speaker_participant_device_changed,
+	                             initial_mgr3_stat.number_of_active_speaker_participant_device_changed + 2,
+	                             liblinphone_tester_sip_timeout));
+	linphone_call_check_rtp_sessions(call1);
 	BC_ASSERT_TRUE(linphone_call_compare_video_color(call1, c3, MediaStreamSendRecv, ""));
 	BC_ASSERT_FALSE(linphone_call_compare_video_color(call1, c1, MediaStreamSendRecv, ""));
 
@@ -669,6 +747,8 @@ void _linphone_conference_video_change(bctbx_list_t *lcs,
 
 		bctbx_list_free_with_data(devices, (bctbx_list_free_func)linphone_participant_device_unref);
 	}
+
+	return mgr1;
 }
 
 const char *_linphone_call_get_subject(LinphoneCall *call) {
@@ -707,7 +787,11 @@ static void check_expected_candidate_type(LinphoneCoreManager *m,
 	// bctbx_message("default-candidate=%s", ip.c_str());
 	if (ai) {
 		char rawip[64] = {0};
-		bctbx_addrinfo_to_ip_address(ai, rawip, sizeof(rawip), NULL);
+		struct sockaddr_storage ss;
+		socklen_t slen = (socklen_t)ai->ai_addrlen;
+		memcpy(&ss, ai->ai_addr, ai->ai_addrlen);
+		bctbx_sockaddr_remove_v4_mapping((struct sockaddr *)&ss, (struct sockaddr *)&ss, &slen);
+		bctbx_sockaddr_to_ip_address((struct sockaddr *)&ss, slen, rawip, sizeof(rawip), NULL);
 		relayIP = rawip;
 	}
 	switch (expected_type) {
@@ -716,10 +800,11 @@ static void check_expected_candidate_type(LinphoneCoreManager *m,
 			break;
 		case TesterIceCandidateSflrx:
 			BC_ASSERT_FALSE(address_in_list(ip, local_addresses));
+			BC_ASSERT_STRING_NOT_EQUAL(ip.c_str(), relayIP.c_str());
 			BC_ASSERT_TRUE(ip != relayIP);
 			break;
 		case TesterIceCandidateRelay:
-			BC_ASSERT_TRUE(ip == relayIP);
+			BC_ASSERT_STRING_EQUAL(ip.c_str(), relayIP.c_str());
 			break;
 	}
 }
@@ -876,12 +961,13 @@ bool check_conference_ssrc(LinphoneConference *local_conference, LinphoneConfere
 								// The thumbnail video stream can only be sendonly (or recvonly from the server
 								// standpoint) or inactive. Henceherefore a client that can only receive video, will
 								// have to set it to inactive
+								uint32_t stream_ssrc = linphone_participant_device_get_ssrc(device, type);
 								if (media_direction == LinphoneMediaDirectionInactive) {
-									if (linphone_participant_device_get_ssrc(device, type) != 0) {
+									if (stream_ssrc != 0) {
 										ret = false;
 									}
 								} else {
-									if (linphone_participant_device_get_ssrc(device, type) == 0) {
+									if (stream_ssrc == 0) {
 										ret = false;
 									}
 								}
@@ -892,17 +978,14 @@ bool check_conference_ssrc(LinphoneConference *local_conference, LinphoneConfere
 									if (!stream_available) {
 										continue;
 									}
-									uint32_t video_ssrc = linphone_participant_device_get_ssrc(device, type);
-
 									auto cppDevice = ParticipantDevice::toCpp(device)->getSharedFromThis();
 									bool thumbnail_available = cppDevice->getThumbnailStreamAvailability();
 									uint32_t thumbnail_ssrc = cppDevice->getThumbnailStreamSsrc();
-
 									if (thumbnail_available) {
 										if (thumbnail_ssrc == 0) {
 											ret = false;
 										}
-										if (thumbnail_ssrc == video_ssrc) {
+										if (thumbnail_ssrc == stream_ssrc) {
 											ret = false;
 										}
 									}
@@ -1032,4 +1115,18 @@ const char *_linphone_call_get_local_rtp_address(const LinphoneCall *call) {
 
 const char *_linphone_call_get_remote_rtp_address(const LinphoneCall *call) {
 	return _linphone_call_get_remote_desc(call)->getConnectionAddress().c_str();
+}
+
+void check_session_error(LinphoneConferenceScheduler *scheduler, LinphoneReason reason) {
+	auto cppScheduler = ConferenceScheduler::toCpp(scheduler);
+	auto sipConferenceScheduler = dynamic_cast<SIPConferenceScheduler *>(cppScheduler);
+	if (BC_ASSERT_PTR_NOT_NULL(sipConferenceScheduler)) {
+		auto session = sipConferenceScheduler->getSession();
+		if (BC_ASSERT_PTR_NOT_NULL(session)) {
+			auto errorInfo = session->getErrorInfo();
+			if (BC_ASSERT_PTR_NOT_NULL(errorInfo)) {
+				BC_ASSERT_EQUAL(linphone_error_info_get_reason(errorInfo), reason, int, "%i");
+			}
+		}
+	}
 }

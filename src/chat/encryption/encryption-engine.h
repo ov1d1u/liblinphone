@@ -125,8 +125,6 @@ public:
 		return nullptr;
 	}
 
-	virtual void cleanDb() {
-	}
 	virtual EngineType getEngineType() {
 		return EngineType::Undefined;
 	}
@@ -155,8 +153,8 @@ public:
 	virtual void rawEncrypt(
 	    BCTBX_UNUSED(const std::string &localDeviceId),
 	    BCTBX_UNUSED(const std::list<std::string> &recipientDevices),
-	    BCTBX_UNUSED(std::shared_ptr<const std::vector<uint8_t>> plainMessage),
-	    BCTBX_UNUSED(std::shared_ptr<const std::vector<uint8_t>> associatedData),
+	    BCTBX_UNUSED(const std::vector<uint8_t> &plainMessage),
+	    BCTBX_UNUSED(const std::vector<uint8_t> &associatedData),
 	    BCTBX_UNUSED(const std::function<void(const bool status,
 	                                          std::unordered_map<std::string, std::vector<uint8_t>> cipherTexts)>
 	                     &callback)) const {};

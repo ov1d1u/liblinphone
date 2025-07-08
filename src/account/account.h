@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010-2023 Belledonne Communications SARL.
+ * Copyright (c) 2010-2025 Belledonne Communications SARL.
  *
  * This file is part of Liblinphone
  * (see https://gitlab.linphone.org/BC/public/liblinphone).
@@ -28,6 +28,7 @@
 #include "c-wrapper/internal/c-sal.h"
 #include "call/call-log.h"
 #include "conference/conference-info.h"
+#include "http/http-client.h"
 #include "linphone/api/c-callbacks.h"
 #include "linphone/api/c-types.h"
 #include "sal/register-op.h"
@@ -55,6 +56,7 @@ class Address;
 class Event;
 class AbstractChatRoom;
 class EventPublish;
+class HttpResponse;
 
 class LINPHONE_PUBLIC Account : public bellesip::HybridObject<LinphoneAccount, Account>,
                                 public UserDataAccessor,
@@ -77,7 +79,9 @@ public:
 	void setRegisterChanged(bool registerChanged);
 	void setSendPublish(bool sendPublish);
 	void setNeedToRegister(bool needToRegister);
-	void setDeletionDate(time_t deletionDate);
+	void triggerDeletion();
+	void cancelDeletion();
+	bool deletionPending() const;
 	void setSipEtag(const std::string &sipEtag);
 	void setErrorInfo(LinphoneErrorInfo *errorInfo);
 	void setContactAddress(const std::shared_ptr<const Address> &contact);
@@ -95,7 +99,6 @@ public:
 	// Getters
 	int getAuthFailure() const;
 	bool getRegisterChanged() const;
-	time_t getDeletionDate() const;
 	const std::string &getSipEtag() const;
 	const LinphoneErrorInfo *getErrorInfo();
 	const std::shared_ptr<Address> &getContactAddress() const;
@@ -114,13 +117,16 @@ public:
 	int getUnreadChatMessageCount() const;
 	const std::list<std::shared_ptr<AbstractChatRoom>> &getChatRooms() const;
 	const bctbx_list_t *getChatRoomsCList() const;
-	const std::list<std::shared_ptr<AbstractChatRoom>> filterChatRooms(const std::string &filter) const;
+	std::list<std::shared_ptr<AbstractChatRoom>> filterChatRooms(const std::string &filter) const;
 
 	int getMissedCallsCount() const;
 	std::list<std::shared_ptr<CallLog>> getCallLogs() const;
 	std::list<std::shared_ptr<CallLog>> getCallLogsForAddress(const std::shared_ptr<const Address> &) const;
 	std::list<std::shared_ptr<ConferenceInfo>>
 	getConferenceInfos(const std::list<LinphoneStreamType> capabilities = {}) const;
+	void addConferenceInfo(const std::shared_ptr<ConferenceInfo> &info);
+	void ccmpConferenceInformationResponseReceived();
+	void ccmpConferenceInformationRequestSent();
 
 	// Other
 	void resetMissedCallsCount();
@@ -147,14 +153,12 @@ public:
 	const std::string &getCustomParam(const std::string &key) const;
 	void writeToConfigFile(int index);
 	const LinphoneAuthInfo *findAuthInfo() const;
-	std::shared_ptr<EventPublish> createPublish(const std::string event, int expires);
+	std::shared_ptr<EventPublish> createPublish(const std::string &event, int expires);
 	LinphoneReason getError();
 	LinphoneTransportType getTransport();
 	std::shared_ptr<Event> getMwiEvent() const;
 	void subscribeToMessageWaitingIndication();
 	void unsubscribeFromMessageWaitingIndication();
-
-	// Callbacks
 
 	// Utils
 	static LinphoneAccountAddressComparisonResult compareLinphoneAddresses(const std::shared_ptr<const Address> &a,
@@ -167,6 +171,18 @@ public:
 	LinphoneProxyConfig *getConfig() const;
 	void setConfig(LinphoneProxyConfig *config, bool takeProxyConfigRef = true);
 	LinphoneAccountAddressComparisonResult isServerConfigChanged();
+
+	void updateConferenceInfoListWithCcmp() const;
+
+	void handleCCMPResponseConferenceList(const HttpResponse &response);
+	void handleCCMPResponseConferenceInformation(const HttpResponse &response);
+	// CCMP request callback (conference list)
+	static void handleResponseConferenceList(void *ctx, const HttpResponse &event);
+	static void handleTimeoutConferenceList(void *ctx, const HttpResponse &event);
+	static void handleIoErrorConferenceList(void *ctx, const HttpResponse &event);
+	static void handleResponseConferenceInformation(void *ctx, const HttpResponse &event);
+	static void handleTimeoutConferenceInformation(void *ctx, const HttpResponse &event);
+	static void handleIoErrorConferenceInformation(void *ctx, const HttpResponse &event);
 
 private:
 	LinphoneCore *getCCore() const;
@@ -186,12 +202,15 @@ private:
 	onAudioVideoConferenceFactoryAddressChanged(const std::shared_ptr<Address> &audioVideoConferenceFactoryAddress);
 	void onNatPolicyChanged(const std::shared_ptr<NatPolicy> &policy);
 	void onLimeServerUrlChanged(const std::string &limeServerUrl);
+	void onLimeAlgoChanged(const std::string &limeAlgo);
 	void onMwiServerAddressChanged();
 	bool customContactChanged();
 	std::list<SalAddress *> getOtherContacts();
+	void unsubscribeFromChatRooms();
 	void updateChatRoomList() const;
 
 	void triggerUpdate();
+	void handleDeletion();
 
 	std::shared_ptr<AccountParams> mParams;
 
@@ -202,10 +221,9 @@ private:
 	bool mRegisterChanged = false;
 	bool mSendPublish = false;
 	bool mIsUnregistering = false;
-
 	bool hasProxyConfigRef = false;
 
-	time_t mDeletionDate;
+	belle_sip_source_t *mDeletionTimer = nullptr;
 
 	std::string mSipEtag;
 
@@ -231,6 +249,7 @@ private:
 	unsigned long long mPreviousPublishParamsHash[2] = {0};
 	std::shared_ptr<AccountParams> mOldParams;
 
+	mutable std::list<std::shared_ptr<ConferenceInfo>> mConferenceInfos;
 	mutable ListHolder<AbstractChatRoom> mChatRoomList;
 
 	// This is a back pointer intended to keep both LinphoneProxyConfig and Account
@@ -238,7 +257,8 @@ private:
 	// proxy configs can be replaced.
 	LinphoneProxyConfig *mConfig = nullptr;
 
-	int mMissedCalls;
+	int mMissedCalls = 0;
+	unsigned int mCcmpConferenceInformationRequestsCounter = 0;
 
 	std::shared_ptr<Event> mMwiEvent;
 };
@@ -249,10 +269,13 @@ public:
 	void setRegistrationStateChanged(LinphoneAccountCbsRegistrationStateChangedCb cb);
 	LinphoneAccountCbsMessageWaitingIndicationChangedCb getMessageWaitingIndicationChanged() const;
 	void setMessageWaitingIndicationChanged(LinphoneAccountCbsMessageWaitingIndicationChangedCb cb);
+	LinphoneAccountCbsConferenceInformationUpdatedCb getConferenceInformationUpdated() const;
+	void setConferenceInformationUpdated(LinphoneAccountCbsConferenceInformationUpdatedCb cb);
 
 private:
 	LinphoneAccountCbsRegistrationStateChangedCb mRegistrationStateChangedCb = nullptr;
 	LinphoneAccountCbsMessageWaitingIndicationChangedCb mMessageWaitingIndicationChangedCb = nullptr;
+	LinphoneAccountCbsConferenceInformationUpdatedCb mConferenceInformationUpdatedCb = nullptr;
 };
 
 class AccountLogContextualizer : public CoreLogContextualizer {
@@ -261,6 +284,14 @@ public:
 	    : CoreLogContextualizer(account ? Account::toCpp(account) : nullptr) {
 	}
 };
+
+inline std::ostream &operator<<(std::ostream &ostr, const Account &account) {
+	const auto &params = account.getAccountParams();
+	const auto identity =
+	    (params && params->getIdentityAddress()) ? params->getIdentityAddress()->toString() : std::string("sip:");
+	ostr << "Account [" << (void *)&account << "]  (" << identity << ")";
+	return ostr;
+}
 
 LINPHONE_END_NAMESPACE
 

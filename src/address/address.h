@@ -106,12 +106,12 @@ public:
 	bool setHeader(const std::string &headerName, const std::string &headerValue);
 
 	bool hasParam(const std::string &paramName) const;
-	const std::string getParamValue(const std::string &paramName) const;
+	std::string getParamValue(const std::string &paramName) const;
 	const char *getParamValueCstr(const std::string &paramName) const;
 	bool setParam(const std::string &paramName, const std::string &paramValue = "");
 	bool setParams(const std::string &params);
 	bool removeParam(const std::string &paramName);
-	inline const std::map<std::string, std::string> getParams() const {
+	inline std::map<std::string, std::string> getParams() const {
 		std::map<std::string, std::string> params;
 		if (mImpl) sal_address_get_params(mImpl, params);
 		return params;
@@ -120,7 +120,7 @@ public:
 	bool hasUriParam(const std::string &uriParamName) const;
 	std::string getUriParamValue(const std::string &uriParamName) const;
 	const char *getUriParamValueCstr(const std::string &uriParamName) const;
-	inline const std::map<std::string, std::string> getUriParams() const {
+	inline std::map<std::string, std::string> getUriParams() const {
 		std::map<std::string, std::string> params;
 		if (mImpl) sal_address_get_uri_params(mImpl, params);
 		return params;
@@ -139,12 +139,12 @@ public:
 	}
 	char *toStringUriOnlyOrderedCstr(bool lowercaseParams = false) const;
 	std::string toStringUriOnlyOrdered(bool lowercaseParams = false) const;
-	std::string toStringOrdered(bool lowercaseParams = false) const;
 
 	std::string asStringUriOnly() const;
 
 	bool clean();
 	bool weakEqual(const Address &other) const;
+	bool weakEqual(const std::shared_ptr<const Address> address) const;
 	bool uriEqual(const Address &other) const;
 
 	inline const SalAddress *getImpl() const {
@@ -153,6 +153,16 @@ public:
 	void setImpl(SalAddress *value);
 	void setImpl(const SalAddress *value);
 	static void clearSipAddressesCache();
+	struct WeakLess {
+		bool operator()(const Address &address1, const Address &address2) const {
+			return address1 < address2;
+		}
+	};
+	struct WeakEqual {
+		bool operator()(const Address &address1, const Address &address2) const {
+			return address1.weakEqual(address2);
+		}
+	};
 
 protected:
 	static SalAddress *getSalAddressFromCache(const std::string &address, bool assumeGrUri);

@@ -26,7 +26,9 @@ set(jni_sources "${CMAKE_CURRENT_BINARY_DIR}/src/linphone_jni.cc")
 # Remove everything after the last point in LINPHONE_VERSION (4.5.0 --> 4.5) to create STRIPPED_LINPHONE_VERSION
 string(REGEX REPLACE "\\.[^.]*$" "" STRIPPED_LINPHONE_VERSION ${LINPHONE_VERSION})
 
-if(ANDROID)
+if(ANDROID_BUNDLED)
+	set(_wrapper_platform "bundled-android")
+elseif(ANDROID)
 	set(_wrapper_platform "android")
 else()
 	set(_wrapper_platform "desktop")
@@ -34,7 +36,7 @@ endif()
 
 add_custom_command(OUTPUT "${jni_sources}"
 	COMMAND ${CMAKE_COMMAND} -E remove -f java/org/linphone/core/* src/*
-	COMMAND ${PYTHON_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/genwrapper.py" "${PROJECT_BINARY_DIR}/coreapi/help/doc/doxygen/xml" "-o" "${CMAKE_CURRENT_BINARY_DIR}" "-v" "${STRIPPED_LINPHONE_VERSION}" "-d" "${LINPHONESDK_STATE}" "-P" "${_wrapper_platform}"
+	COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/genwrapper.py" "${PROJECT_BINARY_DIR}/coreapi/help/doc/doxygen/xml" "-o" "${CMAKE_CURRENT_BINARY_DIR}" "-v" "${STRIPPED_LINPHONE_VERSION}" "-d" "${LINPHONESDK_STATE}" "-P" "${_wrapper_platform}"
 	DEPENDS ${PROJECT_SOURCE_DIR}/tools/genapixml.py ${LINPHONE_HEADER_FILES}
 	${PROJECT_SOURCE_DIR}/tools/metaname.py
 	${PROJECT_SOURCE_DIR}/tools/metadoc.py
@@ -59,3 +61,8 @@ install(DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/java" DESTINATION "${CMAKE_INSTAL
 install(FILES "${CMAKE_CURRENT_BINARY_DIR}/src/proguard.txt" DESTINATION "${CMAKE_INSTALL_DATADIR}/linphonej/")
 
 #install(DIRECTORY classes/ DESTINATION "${CMAKE_INSTALL_DATADIR}/linphonej/java/org/linphone/core/")
+
+if(ENABLE_JAVA_WRAPPER_TESTER)
+	# Install the tests project into the install data dir
+	install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/WrapperTests" DESTINATION "${CMAKE_INSTALL_DATADIR}/linphonej/")
+endif()

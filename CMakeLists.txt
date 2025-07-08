@@ -4,7 +4,7 @@
 #
 ############################################################################
 #
-# This file is part of Liblinphone 
+# This file is part of Liblinphone
 # (see https://gitlab.linphone.org/BC/public/liblinphone).
 #
 # This program is free software: you can redistribute it and/or modify
@@ -23,7 +23,7 @@
 
 cmake_minimum_required(VERSION 3.22)
 
-project(LibLinphone VERSION 5.4.0 LANGUAGES C CXX)
+project(LibLinphone VERSION 5.5.0 LANGUAGES C CXX)
 
 set(LINPHONE_MAJOR_VERSION ${PROJECT_VERSION_MAJOR})
 set(LINPHONE_MINOR_VERSION ${PROJECT_VERSION_MINOR})
@@ -41,7 +41,9 @@ include(cmake/Tools.cmake)
 option(ENABLE_ADVANCED_IM "Enable advanced instant messaging such as group chat." YES)
 option(ENABLE_CONSOLE_UI "Turn on or off compilation of console interface." OFF)
 option(ENABLE_CSHARP_WRAPPER "Build the C# wrapper for Liblinphone." OFF)
+cmake_dependent_option(ENABLE_CSHARP_WRAPPER_TESTER "Build the C# wrapper tester for Liblinphone." NO "ENABLE_CSHARP_WRAPPER" NO)
 option(ENABLE_PYTHON_WRAPPER "Build the Python wrapper for Liblinphone." OFF)
+cmake_dependent_option(ENABLE_PYTHON_WRAPPER_TESTER "Build the Python wrapper tester for Liblinphone." OFF "ENABLE_PYTHON_WRAPPER" OFF)
 option(ENABLE_CXX_WRAPPER "Build the C++ wrapper for Liblinphone." YES)
 option(ENABLE_DB_STORAGE "Enable database storage." YES)
 option(ENABLE_FLEXIAPI "Enable the FlexiAPI support for Liblinphone." YES)
@@ -54,6 +56,7 @@ option(ENABLE_DATE "Use build date in internal version number." NO)
 option(ENABLE_DEBUG_LOGS "Turn on or off debug level logs." NO)
 option(ENABLE_DOC "Enable API documentation generation." NO)
 option(ENABLE_JAVA_WRAPPER "Build the Java wrapper for Liblinphone." OFF)
+cmake_dependent_option(ENABLE_JAVA_WRAPPER_TESTER "Build the Java wrapper tester for Liblinphone." OFF "ENABLE_JAVA_WRAPPER" OFF)
 option(ENABLE_JAVADOC "Add a target to generate documentation for Java API" NO)
 option(ENABLE_JPEG "Enable JPEG support for QRCode file generation" YES)
 option(ENABLE_LIME_X3DH "Enable LIMEv2 and X3DH encryption protocol." YES)
@@ -74,6 +77,7 @@ option(ENABLE_XML2 "Build with libxml2 support - for presence feature mainly" YE
 option(ENABLE_EXAMPLE_PLUGIN "Enable build of the example plugin" NO)
 option(ENABLE_EKT_SERVER_PLUGIN "Enable build of the EKT encryption plugin" NO)
 option(ENABLE_DEPRECATED_TESTS "Enable execution of deprecated tests" NO)
+option(ENABLE_BAUDOT "Enable Baudot text transmission." YES)
 
 option(ENABLE_SRTP "Build with the SRTP transport support." YES)
 cmake_dependent_option(ENABLE_ZRTP "Build with ZRTP support." YES "ENABLE_SRTP" NO)
@@ -120,6 +124,24 @@ find_package(BCToolbox 5.3.0 REQUIRED OPTIONAL_COMPONENTS tester)
 bc_init_compilation_flags(STRICT_OPTIONS_CPP STRICT_OPTIONS_C STRICT_OPTIONS_CXX ENABLE_STRICT)
 find_package(Belr 5.3.0 REQUIRED)
 
+if(ANDROID_BUNDLED)
+	find_package(MsAaudio)
+	find_package(MsAndroidCamera2)
+	find_package(MsWebRtc)
+endif()
+if (IOS)
+	find_package(MsWebRtc)
+endif()
+if(MsAaudio_FOUND)
+	set(HAVE_STATIC_MSAAUDIO 1)
+endif()
+if(MsAndroidCamera2_FOUND)
+	set(HAVE_STATIC_MSANDROIDCAMERA2 1)
+endif()
+if(MsWebRtc_FOUND)
+	set(HAVE_STATIC_MSWEBRTC 1)
+endif()
+
 if(ENABLE_XERCESC)
 	bc_find_package(XercesC XercesC::XercesC xerces-c REQUIRED)
 	set(LIBXSD_INCLUDE_DIRS "${PROJECT_SOURCE_DIR}/libxsd")
@@ -158,8 +180,8 @@ if(ENABLE_DB_STORAGE)
 		find_package(Soci REQUIRED)
 	endif()
 	set(HAVE_DB_STORAGE 1)
-	if(Soci_STATIC)
-		set(HAVE_STATIC_SOCI 1)
+	if(Soci_STATIC OR APPLE)
+		set(HAVE_MANUAL_SOCI_BACKEND_REGISTRATION 1)
 	endif()
 endif()
 
@@ -183,7 +205,7 @@ if(ENABLE_LIME_X3DH)
 endif()
 
 if(ENABLE_CXX_WRAPPER OR ENABLE_CSHARP_WRAPPER OR ENABLE_JAVA_WRAPPER OR ENABLE_SWIFT_WRAPPER OR ENABLE_DOC OR ENABLE_PYTHON_WRAPPER)
-	find_package(PythonInterp 3 REQUIRED)
+	find_package(Python3 REQUIRED)
 	check_python_module(pystache)
 	check_python_module(six)
 	if(ENABLE_DOC)
@@ -373,6 +395,10 @@ else()
 	set(LINPHONE_PACKAGE_PLUGINS_DIR "${CMAKE_INSTALL_PREFIX}/${LIBLINPHONE_PLUGINS_DIR}" CACHE STRING "Folder where plugins loaded by liblinphone must be stored")
 endif()
 
+if(ENABLE_BAUDOT)
+    set(HAVE_BAUDOT 1)
+endif()
+
 configure_file("${CMAKE_CURRENT_SOURCE_DIR}/config.h.cmake" "${CMAKE_CURRENT_BINARY_DIR}/config.h")
 set_source_files_properties("${CMAKE_CURRENT_BINARY_DIR}/config.h" PROPERTIES GENERATED ON)
 add_definitions(-DHAVE_CONFIG_H)
@@ -474,4 +500,3 @@ endif()
 if(ENABLE_EXAMPLE_PLUGIN)
 	add_subdirectory(plugins/example)
 endif()
-

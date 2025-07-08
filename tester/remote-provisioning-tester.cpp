@@ -64,6 +64,41 @@ static void remote_provisioning_http(void) {
 	linphone_core_manager_destroy(marie);
 }
 
+static void remote_provisioning_contact_list_fetch_at_startup(void) {
+	LinphoneCoreManager *marie = linphone_core_manager_create("marie_remote_rc");
+	const char *vcard_file = "http://provisioning.example.org/vcards.vcf";
+	linphone_config_set_string(linphone_core_get_config(marie->lc), "misc", "contacts-vcard-list", vcard_file);
+
+	// do not get vcard contact list from remote provisioning at startup
+	bool_t fetch_contact_list_at_startup = FALSE;
+	linphone_config_set_bool(linphone_core_get_config(marie->lc), "misc", "fetch_contacts_vcard_list_at_startup",
+	                         fetch_contact_list_at_startup);
+
+	linphone_core_manager_start(marie, FALSE);
+	BC_ASSERT_TRUE(wait_for(marie->lc, NULL, &marie->stat.number_of_LinphoneConfiguringSuccessful, 1));
+	BC_ASSERT_TRUE(wait_for(marie->lc, NULL, &marie->stat.number_of_LinphoneRegistrationOk, 1));
+
+	std::string url =
+	    linphone_config_get_string(linphone_core_get_config(marie->lc), "misc", "contacts-vcard-list", NULL);
+	LinphoneFriendList *friendList = linphone_core_get_friend_list_by_name(marie->lc, url.c_str());
+	BC_ASSERT_PTR_NOT_NULL(friendList);
+	if (friendList) {
+		unsigned int friends_list_size = (unsigned int)bctbx_list_size(linphone_friend_list_get_friends(friendList));
+		BC_ASSERT_EQUAL(friends_list_size, 0, unsigned int, "%u");
+	}
+
+	// check that the vcards file is not missing nor empty
+	linphone_friend_list_synchronize_friends_from_server(friendList);
+	wait_for_until(marie->lc, NULL, NULL, 1, 5000);
+	BC_ASSERT_PTR_NOT_NULL(friendList);
+	if (friendList) {
+		unsigned int friends_list_size = (unsigned int)bctbx_list_size(linphone_friend_list_get_friends(friendList));
+		BC_ASSERT_EQUAL(friends_list_size, 3, unsigned int, "%u");
+	}
+
+	linphone_core_manager_destroy(marie);
+}
+
 static void remote_provisioning_transient(void) {
 	LinphoneCoreManager *marie = linphone_core_manager_new_with_proxies_check("marie_transient_remote_rc", FALSE);
 	BC_ASSERT_TRUE(wait_for(marie->lc, NULL, &marie->stat.number_of_LinphoneConfiguringSuccessful, 1));
@@ -88,7 +123,8 @@ static void aborted_provisioning_https(void) {
 		/** immediately call linphohne_core_stop() without letting the remote provisioning to complete */
 		linphone_core_stop_async(marie->lc);
 		BC_ASSERT_EQUAL(linphone_core_get_global_state(marie->lc), LinphoneGlobalShutdown, int, "%i");
-		BC_ASSERT_TRUE(wait_for(marie->lc, NULL, &marie->stat.number_of_LinphoneConfiguringFailed, 1));
+		BC_ASSERT_TRUE(wait_for(marie->lc, NULL, &marie->stat.number_of_LinphoneConfiguringSkipped, 1));
+		BC_ASSERT_EQUAL(marie->stat.number_of_LinphoneConfiguringFailed, 0, int, "%i");
 		/* now should move to Off state */
 		BC_ASSERT_TRUE(wait_for(marie->lc, NULL, &marie->stat.number_of_LinphoneGlobalOff, 1));
 		linphone_core_manager_destroy(marie);
@@ -220,6 +256,7 @@ static void flexiapi_remote_provisioning_flow(void) {
 	flexiAPIClient = make_shared<LinphonePrivate::FlexiAPIClient>(marie->lc);
 
 	// Clean up
+	fetched = 0;
 	flexiAPIClient->adminAccountDelete(id)->then([&code, &fetched](LinphonePrivate::FlexiAPIClient::Response response) {
 		code = response.code;
 		fetched = 1;
@@ -269,24 +306,23 @@ static void flexiapi_remote_provisioning_contacts_list_flow(void) {
 
 	wait_for_until(marie->lc, NULL, &fetched, 1, liblinphone_tester_sip_timeout);
 
-	fetched = code = 0;
-
 	// Create the contacts accounts
+	fetched = code = 0;
 	flexiAPIClient->adminAccountCreate(usernameContact1, "1234", "MD5", "", true, "", "", "sipinfo")
 	    ->then([&code, &fetched, &contactId1](LinphonePrivate::FlexiAPIClient::Response response) {
 		    code = response.code;
+		    BC_ASSERT_EQUAL(code, 200, int, "%d");
 		    fetched = 1;
 		    contactId1 = response.json()["id"].asInt();
 	    });
 
 	wait_for_until(marie->lc, NULL, &fetched, 1, liblinphone_tester_sip_timeout);
-	BC_ASSERT_EQUAL(code, 200, int, "%d");
 
 	fetched = code = 0;
-
 	flexiAPIClient->adminAccountCreate(usernameContact2, "1234", "MD5", "", true, "", "", "rfc2833")
 	    ->then([&code, &fetched, &contactId2](LinphonePrivate::FlexiAPIClient::Response response) {
 		    code = response.code;
+		    BC_ASSERT_EQUAL(code, 200, int, "%d");
 		    fetched = 1;
 		    contactId2 = response.json()["id"].asInt();
 	    });
@@ -294,18 +330,19 @@ static void flexiapi_remote_provisioning_contacts_list_flow(void) {
 	wait_for_until(marie->lc, NULL, &fetched, 1, liblinphone_tester_sip_timeout);
 	BC_ASSERT_EQUAL(code, 200, int, "%d");
 
-	fetched = code = 0;
+	auto responseCb = [&code, &fetched](const LinphonePrivate::FlexiAPIClient::Response &response) {
+		code = response.code;
+		BC_ASSERT_EQUAL(code, 200, int, "%d");
+		fetched = 1;
+	};
 
 	// Link the contacts
-	flexiAPIClient->adminAccountContactAdd(contactId0, contactId1);
-	flexiAPIClient->adminAccountContactAdd(contactId0, contactId2)
-	    ->then([&code, &fetched](const LinphonePrivate::FlexiAPIClient::Response &response) {
-		    code = response.code;
-		    fetched = 1;
-	    });
-
+	fetched = code = 0;
+	flexiAPIClient->adminAccountContactAdd(contactId0, contactId1)->then(responseCb);
 	wait_for_until(marie->lc, NULL, &fetched, 1, liblinphone_tester_sip_timeout);
-	BC_ASSERT_EQUAL(code, 200, int, "%d");
+	fetched = code = 0;
+	flexiAPIClient->adminAccountContactAdd(contactId0, contactId2)->then(responseCb);
+	wait_for_until(marie->lc, NULL, &fetched, 1, liblinphone_tester_sip_timeout);
 
 	// Provision it
 	std::string remoteProvisioningURIWithConfirmationKey = remoteProvisioningURI;
@@ -397,15 +434,12 @@ static void flexiapi_remote_provisioning_contacts_list_flow(void) {
 	// Clean up
 	flexiAPIClient = make_shared<LinphonePrivate::FlexiAPIClient>(marie->lc);
 
-	flexiAPIClient->adminAccountDelete(contactId1);
-	flexiAPIClient->adminAccountDelete(contactId2)
-	    ->then([&code, &fetched](const LinphonePrivate::FlexiAPIClient::Response &response) {
-		    code = response.code;
-		    fetched = 1;
-	    });
-
+	fetched = 0;
+	flexiAPIClient->adminAccountDelete(contactId1)->then(responseCb);
 	wait_for_until(marie->lc, NULL, &fetched, 1, liblinphone_tester_sip_timeout);
-	BC_ASSERT_EQUAL(code, 200, int, "%d");
+	fetched = 0;
+	flexiAPIClient->adminAccountDelete(contactId2)->then(responseCb);
+	wait_for_until(marie->lc, NULL, &fetched, 1, liblinphone_tester_sip_timeout);
 
 	linphone_core_cbs_unref(cbs);
 	ms_free(stats);
@@ -473,7 +507,8 @@ test_t remote_provisioning_tests[] = {
     TEST_NO_TAG("Remote provisioning default values", remote_provisioning_default_values),
     TEST_NO_TAG("Remote provisioning from file", remote_provisioning_file),
     TEST_NO_TAG("Remote provisioning invalid URI", remote_provisioning_invalid_uri),
-    TEST_NO_TAG("Remote provisioning check if push tokens are not lost", remote_provisioning_check_push_params)
+    TEST_NO_TAG("Remote provisioning check if push tokens are not lost", remote_provisioning_check_push_params),
+    TEST_NO_TAG("Remote Provisioning Contacts List fetch at startup", remote_provisioning_contact_list_fetch_at_startup)
 #ifdef HAVE_FLEXIAPI
         ,
     TEST_NO_TAG("Remote Provisioning Flow", flexiapi_remote_provisioning_flow),

@@ -124,7 +124,7 @@ bool Address::operator!=(const Address &other) const {
 }
 
 bool Address::operator<(const Address &other) const {
-	return toStringOrdered() < other.toStringOrdered();
+	return toStringUriOnlyOrdered() < other.toStringUriOnlyOrdered();
 }
 
 // -----------------------------------------------------------------------------
@@ -340,28 +340,6 @@ string Address::toStringUriOnlyOrdered(bool lowercaseParams) const {
 	return res.str();
 }
 
-string Address::toStringOrdered(bool lowercaseParams) const {
-	auto res = toStringUriOnlyOrdered(lowercaseParams);
-	const auto uriParams = getUriParams();
-	for (const auto &param : uriParams) {
-		auto name = param.first;
-		if (lowercaseParams) {
-			std::transform(name.begin(), name.end(), name.begin(), [](unsigned char c) { return tolower(c); });
-		}
-		res += ";";
-		res += name;
-		auto value = param.second;
-		if (!value.empty()) {
-			if (lowercaseParams) {
-				std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) { return tolower(c); });
-			}
-			res += "=";
-			res += value;
-		}
-	}
-	return res;
-}
-
 char *Address::toStringUriOnlyOrderedCstr(bool lowercaseParams) const {
 	auto ordered = toStringUriOnlyOrdered(lowercaseParams);
 	return ms_strdup(ordered.c_str());
@@ -380,6 +358,10 @@ std::string Address::asStringUriOnly() const {
 
 bool Address::weakEqual(const Address &address) const {
 	return !!sal_address_weak_equals(mImpl, address.mImpl);
+}
+
+bool Address::weakEqual(const shared_ptr<const Address> address) const {
+	return address && weakEqual(*address);
 }
 
 bool Address::uriEqual(const Address &other) const {
@@ -409,7 +391,7 @@ const char *Address::getParamValueCstr(const string &paramName) const {
 	return mImpl ? sal_address_get_param(mImpl, paramName.c_str()) : nullptr;
 }
 
-const std::string Address::getParamValue(const std::string &paramName) const {
+std::string Address::getParamValue(const std::string &paramName) const {
 	return L_C_TO_STRING(getParamValueCstr(paramName));
 }
 
@@ -468,7 +450,7 @@ bool Address::removeUriParam(const string &uriParamName) {
 }
 
 void Address::copyUriParams(const Address &other) {
-	const auto otherUriParams = other.getParams();
+	const auto otherUriParams = other.getUriParams();
 	for (const auto &[name, value] : otherUriParams) {
 		setUriParam(name, value);
 	}
